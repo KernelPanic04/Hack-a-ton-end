@@ -1,23 +1,26 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.repository.user_repository import UserRepository
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
-# DTO (Schema) de Pydantic para el cuerpo del POST
 class UserCreate(BaseModel):
     name: str
     email: str
 
-@router.get("/")
-def read_root():
-    return {"Hello": "World"}
-
 @router.get("/{user_id}")
-def get_user(user_id: int):
-    # Aquí la capa Service/Repo buscará al usuario
-    return {"user_id": user_id}
+async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
+    repo = UserRepository(db)
+    user = await repo.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    return {"id": user.id, "name": user.name, "email": user.email}
 
 @router.post("/")
-def create_user(user: UserCreate):
-    # Aquí la capa Service/Repo creará al usuario
-    return {"user_name": user.name, "email": user.email}
+async def create_user(user: UserCreate, db: AsyncSession = Depends(get_db)):
+    repo = UserRepository(db)
+    new_user = await repo.create(user.model_dump())
+    return {"id": new_user.id, "name": new_user.name, "email": new_user.email}
