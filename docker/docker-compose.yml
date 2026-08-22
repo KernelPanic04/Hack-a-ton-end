@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hack_a_ton_end_db
+    environment:
+      POSTGRES_USER: hack_user
+      POSTGRES_PASSWORD: hack_password
+      POSTGRES_DB: hack_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  volumes:
+    postgres_data:
