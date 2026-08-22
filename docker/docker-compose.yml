@@ -1,4 +1,4 @@
-version: '3.8'
+
 
 services:
   postgres:
@@ -7,10 +7,10 @@ services:
     environment:
       POSTGRES_USER: hack_user
       POSTGRES_PASSWORD: hack_password
-      POSTGRES_DB: hack_db
+      POSTGRES_DB: hackathon_db
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-  volumes:
-    postgres_data:
+volumes:
+  postgres_data:
