@@ -2,8 +2,7 @@ from typing import List
 from fastapi import HTTPException, status
 
 from app.repository.user_repository import UserRepository
-from app.core.security import password_hash
-from app.schemas.user_schema import UserCreateSchema
+from app.schemas.user_schema import UserCreateSchema, UserResponseSchema
 
 class UserService:
     def __init__(self, repository: UserRepository):
@@ -13,7 +12,7 @@ class UserService:
         user = await self.repository.get_by_id(user_id)
         if not user:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail="Usuario no encontrado"
             )
         return user
