@@ -2,10 +2,8 @@ from typing import List
 from fastapi import HTTPException, status
 
 from app.repository.user_repository import UserRepository
-from pwdlib import PasswordHash
+from app.core.security import password_hash
 from app.schemas.user_schema import UserCreateSchema
-
-password_hash = PasswordHash.recommended()
 
 class UserService:
     def __init__(self, repository: UserRepository):

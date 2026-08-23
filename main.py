@@ -12,6 +12,7 @@ from sqlalchemy.future import select
 # Importante: cargar el modelo antes de crear tablas
 from app.models.user import UserModel
 from app.models.user_test import UserTestModel
+from app.core.security import password_hash
 
 FAKE_USERS = [
     {"name": "Alice Backend", "email": "alice@hackathon.com"},
@@ -32,7 +33,10 @@ async def seed_database_if_empty():
         if not has_data:
             print("Base de datos vacía. Insertando datos de prueba iniciales...")
             for user_data in FAKE_USERS:
-                session.add(UserTestModel(**user_data))
+                session.add(UserTestModel(
+                    **user_data,
+                    password_hash=password_hash.hash("Hackathon123!"),
+                ))
             await session.commit()
             print("Datos de prueba insertados automáticamente.")
 
@@ -45,6 +49,13 @@ async def lifespan(app: FastAPI):
         await conn.execute(text(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)"
         ))
+        await conn.execute(text(
+            "ALTER TABLE test_users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)"
+        ))
+        await conn.execute(
+            text("UPDATE test_users SET password_hash = :password_hash WHERE password_hash IS NULL"),
+            {"password_hash": password_hash.hash("Hackathon123!")},
+        )
     await seed_database_if_empty()
     yield
     await engine.dispose()
