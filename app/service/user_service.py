@@ -2,7 +2,8 @@ from typing import List
 from fastapi import HTTPException, status
 
 from app.repository.user_repository import UserRepository
-from app.schemas.user_schema import UserCreateSchema, UserResponseSchema  
+from app.core.security import password_hash
+from app.schemas.user_schema import UserCreateSchema
 
 class UserService:
     def __init__(self, repository: UserRepository):
@@ -25,10 +26,23 @@ class UserService:
         existing_user = await self.repository.get_by_email(user_in.email)
         if existing_user:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_409_CONFLICT,
                 detail="El correo electrónico ya está registrado"
             )
-        return await self.repository.create(user_in.model_dump())
+        data = user_in.model_dump()
+        plain_password = data.pop("password")
+        data["email"] = str(data["email"]).lower()
+        data["password_hash"] = password_hash.hash(plain_password)
+        return await self.repository.create(data)
+
+    async def authenticate(self, email: str, password: str):
+        user = await self.repository.get_by_email(email)
+        if not user or not user.password_hash or not password_hash.verify(password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Correo o contraseña incorrectos",
+            )
+        return user
 
     async def delete_user(self, user_id: int):
         success = await self.repository.delete(user_id)
