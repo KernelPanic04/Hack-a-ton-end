@@ -2,7 +2,7 @@ from typing import List
 from fastapi import HTTPException, status
 
 from app.repository.user_test_repository import UserTestRepository
-from app.schemas.user_test_schema import UserTestCreateSchema, UserTestResponseSchema  
+from app.schemas.user_test_schema import UserTestCreateSchema, UserTestResponseSchema
 
 class UserTestService:
     def __init__(self, repository: UserTestRepository):
@@ -12,7 +12,7 @@ class UserTestService:
         user = await self.repository.get_by_id(user_id)
         if not user:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail="Usuario no encontrado"
             )
         return user
@@ -38,3 +38,14 @@ class UserTestService:
                 detail="Usuario no encontrado"
             )
         return {"message": "Usuario eliminado exitosamente"}
+
+    async def login(self, email: str):
+        """"Autenticación" sin contraseña: si el correo existe en la tabla,
+        se acepta el login y se devuelve ese usuario."""
+        user = await self.repository.get_by_email(email)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No encontramos una cuenta con ese correo"
+            )
+        return user
