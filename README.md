@@ -101,16 +101,10 @@ pip install -r requirements.txt
 
 ## 🏃 Run the Backend Locally
 
-### 1. Start the Docker services
+### 1. Start PostgreSQL and FastAPI
 
 ```bash
 docker compose -f docker/docker-compose.yml up -d
-```
-
-### 2. Start the FastAPI backend
-
-```bash
-uvicorn main:app --reload
 ```
 
 The backend will be available at:
@@ -125,26 +119,46 @@ Interactive API documentation (Swagger UI):
 http://localhost:8000/docs
 ```
 
-### 3. Test the Backend
+### 2. Test the Backend
 
 You can access the following endpoint:
 
 ```text
-http://localhost:8000/users_test
+http://localhost:8000/ready
 ```
 
 ---
 
 ## 🛑 Stop the Backend
 
-First, stop the FastAPI server:
-
-```text
-Ctrl + C
-```
-
-Then stop and remove the Docker services:
+Stop the Docker services while preserving database data:
 
 ```bash
-docker compose -f docker/docker-compose.yml down -v
+docker compose -f docker/docker-compose.yml down
 ```
+
+Add `-v` only when you intentionally want to delete the local database.
+
+## Railway
+
+This repository is ready to run as a Railway `backend` service. `railway.json`
+selects `docker/Dockerfile`, waits for the database-aware `/ready` endpoint and
+restarts transient failures. Configure these service variables:
+
+```env
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+PORT=8000
+AUTH_USER_MODE=users
+SQL_ECHO=false
+DB_STARTUP_MAX_ATTEMPTS=15
+DB_STARTUP_RETRY_SECONDS=2
+```
+
+`DATABASE_URL` accepts the standard `postgres://` or `postgresql://` URL Railway
+provides and converts it to the async SQLAlchemy driver automatically. Startup
+retries cover the case where the managed Postgres service is not ready yet.
+
+Authentication is exposed at `POST /api/auth/register` and
+`POST /api/auth/login`. Change `AUTH_USER_MODE=test_users` to use the seeded demo
+accounts instead of the main `users` table; their password is
+`Hackathon123!`.

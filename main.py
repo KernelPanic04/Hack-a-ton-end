@@ -1,6 +1,7 @@
-import os
+import asyncio
 from contextlib import asynccontextmanager
 import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.database import engine, Base, AsyncSessionLocal
@@ -8,6 +9,7 @@ from app.controller.user_controller import router as user_router
 from app.controller.user_test_controller import router as user_test_router
 from app.controller.auth_controller import router as auth_router
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.future import select
 
 # Importante: cargar el modelo antes de crear tablas
@@ -38,7 +40,7 @@ DEFAULT_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
 ]
 
-_allowed_origins_env = os.getenv("ALLOWED_ORIGINS")
+_allowed_origins_env = os.getenv("CORS_ORIGINS") or os.getenv("ALLOWED_ORIGINS")
 ALLOWED_ORIGINS = (
     [origin.strip() for origin in _allowed_origins_env.split(",") if origin.strip()]
     if _allowed_origins_env
@@ -64,8 +66,7 @@ async def seed_database_if_empty():
             print("Datos de prueba insertados automáticamente.")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+async def initialize_database():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # Compatibilidad con bases creadas antes de agregar autenticación.
@@ -80,6 +81,30 @@ async def lifespan(app: FastAPI):
             {"password_hash": password_hash.hash("Hackathon123!")},
         )
     await seed_database_if_empty()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Railway no implementa depends_on: la API puede arrancar unos segundos
+    # antes que PostgreSQL. Reintentamos de forma acotada antes de fallar para
+    # que el despliegue no dependa de una carrera entre servicios.
+    max_attempts = max(1, int(os.getenv("DB_STARTUP_MAX_ATTEMPTS", "15")))
+    retry_delay = max(0.1, float(os.getenv("DB_STARTUP_RETRY_SECONDS", "2")))
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            await initialize_database()
+            break
+        except SQLAlchemyError:
+            if attempt == max_attempts:
+                raise
+            print(
+                f"PostgreSQL no está disponible (intento {attempt}/{max_attempts}); "
+                f"reintentando en {retry_delay:g}s..."
+            )
+            await engine.dispose()
+            await asyncio.sleep(retry_delay)
+
     yield
     await engine.dispose()
 
@@ -96,9 +121,17 @@ app.add_middleware(
 
 @app.get("/health", tags=["Health"])
 async def health():
-    """Usado por el HEALTHCHECK de Docker (ver docker/Dockerfile)."""
     return {"status": "ok"}
+
+
+@app.get("/ready", tags=["Health"])
+async def ready():
+    """Comprueba que la API también puede consultar PostgreSQL."""
+    async with engine.connect() as connection:
+        await connection.execute(text("SELECT 1"))
+    return {"status": "ready"}
 
 
 app.include_router(user_router)
 app.include_router(user_test_router)
+app.include_router(auth_router)

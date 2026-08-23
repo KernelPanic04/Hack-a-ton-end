@@ -15,6 +15,5 @@ class UserTestResponseSchema(BaseModel):
 
 
 class UserTestLoginSchema(BaseModel):
-    """Solo el correo: no hay contraseña. Si el correo existe en la tabla,
-    se acepta el login."""
     email: EmailStr
+    password: str = Field(min_length=8, max_length=128)

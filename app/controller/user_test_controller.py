@@ -13,6 +13,15 @@ def get_user_service(db: AsyncSession = Depends(get_db)) -> UserTestService:
     repo = UserTestRepository(db)
     return UserTestService(repo)
 
+@router.post("/login", response_model=UserTestResponseSchema)
+async def login(
+    credentials: UserTestLoginSchema,
+    service: UserTestService = Depends(get_user_service)
+):
+    # Debe declararse antes de /{user_id}; de lo contrario Starlette intenta
+    # interpretar "login" como el identificador dinámico y responde 422.
+    return await service.authenticate(str(credentials.email), credentials.password)
+
 @router.get("/{user_id}", response_model=UserTestResponseSchema)
 async def get_user(
     user_id: int,
@@ -34,15 +43,6 @@ async def create_user(
     service: UserTestService = Depends(get_user_service)
 ):
     return await service.create_user(user_in)
-
-@router.post("/login", response_model=UserTestResponseSchema)
-async def login(
-    credentials: UserTestLoginSchema,
-    service: UserTestService = Depends(get_user_service)
-):
-    """Busca el correo en la tabla test_users. Si existe, se acepta el login
-    (sin verificación de contraseña); si no, devuelve 401."""
-    return await service.login(credentials.email)
 
 @router.delete("/{user_id}")
 async def delete_user(

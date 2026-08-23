@@ -32,7 +32,14 @@ DATABASE_URL = _to_asyncpg_url(
     )
 )
 
-engine = create_async_engine(DATABASE_URL, echo=True, future=True)
+SQL_ECHO = os.getenv("SQL_ECHO", "false").lower() in {"1", "true", "yes"}
+
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=SQL_ECHO,
+    future=True,
+    pool_pre_ping=True,
+)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

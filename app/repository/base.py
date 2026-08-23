@@ -21,7 +21,11 @@ class BaseRepository(Generic[ModelType]):
     async def create(self, obj_in_data: dict) -> ModelType:
         db_obj = self.model(**obj_in_data)
         self.session.add(db_obj)
-        await self.session.commit()
+        try:
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
         await self.session.refresh(db_obj)
         return db_obj
 
@@ -29,7 +33,11 @@ class BaseRepository(Generic[ModelType]):
         for field, value in obj_in_data.items():
             if hasattr(db_obj, field) and value is not None:
                 setattr(db_obj, field, value)
-        await self.session.commit()
+        try:
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
         await self.session.refresh(db_obj)
         return db_obj
 
@@ -37,6 +45,10 @@ class BaseRepository(Generic[ModelType]):
         obj = await self.get_by_id(id)
         if obj:
             await self.session.delete(obj)
-            await self.session.commit()
+            try:
+                await self.session.commit()
+            except Exception:
+                await self.session.rollback()
+                raise
             return True
         return False

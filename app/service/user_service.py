@@ -1,6 +1,8 @@
 from typing import List
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 
+from app.core.security import password_hash
 from app.repository.user_repository import UserRepository
 from app.schemas.user_schema import UserCreateSchema, UserResponseSchema
 
@@ -21,21 +23,36 @@ class UserService:
         return await self.repository.get_all(skip=skip, limit=limit)
 
     async def create_user(self, user_in: UserCreateSchema):
-        # Business Logic Example: Check duplicate email
-        existing_user = await self.repository.get_by_email(user_in.email)
+        data = user_in.model_dump()
+        plain_password = data.pop("password")
+        normalized_email = str(data["email"]).strip().lower()
+        existing_user = await self.repository.get_by_email(normalized_email)
         if existing_user:
+            # Las cuentas creadas por la versión antigua no tenían contraseña.
+            # Permitir registrarlas una vez más sirve como migración segura para
+            # el hackathon sin asignar una contraseña global conocida.
+            if not existing_user.password_hash:
+                return await self.repository.update(existing_user, {
+                    "name": data["name"],
+                    "email": normalized_email,
+                    "password_hash": password_hash.hash(plain_password),
+                })
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="El correo electrónico ya está registrado"
             )
-        data = user_in.model_dump()
-        plain_password = data.pop("password")
-        data["email"] = str(data["email"]).lower()
+        data["email"] = normalized_email
         data["password_hash"] = password_hash.hash(plain_password)
-        return await self.repository.create(data)
+        try:
+            return await self.repository.create(data)
+        except IntegrityError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="El correo electrónico ya está registrado",
+            ) from error
 
     async def authenticate(self, email: str, password: str):
-        user = await self.repository.get_by_email(email)
+        user = await self.repository.get_by_email(email.strip().lower())
         if not user or not user.password_hash or not password_hash.verify(password, user.password_hash):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
