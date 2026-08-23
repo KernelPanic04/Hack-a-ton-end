@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.core.database import engine, Base, AsyncSessionLocal
 from app.controller.user_controller import router as user_router
+from app.controller.user_test_controller import router as user_test_router
 from sqlalchemy.future import select
 
 # Importante: cargar el modelo antes de crear tablas
@@ -43,3 +44,4 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Hackathon API Base", lifespan=lifespan)
 
 app.include_router(user_router)
+app.include_router(user_test_router)
