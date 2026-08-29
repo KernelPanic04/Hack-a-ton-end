@@ -8,6 +8,7 @@ from app.schemas.contracts import (
     RunProjection,
     RunStepProjection,
 )
+from app.synthesis import DeterministicComposer
 from app.synthesis.composer import compose
 
 
@@ -55,6 +56,10 @@ def projection(*, attention: bool = False, decision: bool = False) -> RunProject
 
 
 class DeterministicComposerTests(unittest.TestCase):
+    def test_object_api_is_exported_for_runtime_pipeline(self) -> None:
+        spec = DeterministicComposer().compose(projection())
+        self.assertEqual(spec.generated_by, "deterministic")
+
     def test_normal_projection_produces_a_valid_summary_layout(self) -> None:
         spec = compose(projection())
         self.assertEqual(spec.generated_by, "deterministic")
