@@ -10,7 +10,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY docker .
+COPY . .
 
 # Run as a non-root user inside the container.
 RUN useradd --create-home appuser

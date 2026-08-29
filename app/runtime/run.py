@@ -21,9 +21,42 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.flow.engine import FlowEngine
 from app.flow.models import FlowDefinition
 from app.models.run import HumanDecisionModel, RunEventModel, RunModel
-from app.schemas.contracts import PendingDecision, RunEventType, RunProjection, RunStatus
+from app.runtime.status import StoredRunStatus
+from app.schemas.contracts import (
+    ActionDefinition,
+    DecisionRequest,
+    RunEvent,
+    RunEventType,
+    RunProjection,
+    RunStepProjection,
+)
 
 _PENDING_DECISION_KEY = "_pending_decision"
+
+
+def _wire_id(prefix: str, value: object) -> str:
+    raw = str(value)
+    return raw if raw.startswith(f"{prefix}_") else f"{prefix}_{raw}"
+
+
+def _projection_status(stored_status: str) -> str:
+    return {
+        StoredRunStatus.RUNNING.value: "running",
+        StoredRunStatus.DECISION_REQUIRED.value: "paused",
+        StoredRunStatus.PAUSED.value: "paused",
+        StoredRunStatus.COMPLETED.value: "completed",
+        StoredRunStatus.ERROR.value: "failed",
+    }[stored_status]
+
+
+def _action_definition(action_id: str) -> ActionDefinition:
+    normalized = _wire_id("act", action_id)
+    return ActionDefinition(
+        action_id=normalized,
+        label=normalized.removeprefix("act_").replace("_", " ").title(),
+        risk="medium",
+        requires_human=True,
+    )
 
 
 class RunEngineError(Exception):
@@ -45,7 +78,7 @@ class RunEngine:
         run = RunModel(
             workflow_id=workflow_id,
             workflow_version_id=workflow_version_id,
-            status=RunStatus.RUNNING.value,
+            status=StoredRunStatus.RUNNING.value,
             current_step_id=first_step.id,
             state={},
             state_version=0,
@@ -70,7 +103,7 @@ class RunEngine:
         producido por el generic step executor en Fase 4) sobre el paso
         actual del run."""
         run = await self._get_run_or_raise(run_id)
-        if run.status != RunStatus.RUNNING.value:
+        if run.status != StoredRunStatus.RUNNING.value:
             raise RunEngineError(f"Run {run_id} no está corriendo (status={run.status})")
         if run.current_step_id != step_id:
             raise RunEngineError(
@@ -82,13 +115,25 @@ class RunEngine:
         run.state_version += 1
 
         if pending_decision:
-            new_state[_PENDING_DECISION_KEY] = pending_decision
+            prepared_decision = {
+                **pending_decision,
+                "decision_id": _wire_id("dec", uuid.uuid4()),
+                "step_id": _wire_id("step", step_id),
+                "title": pending_decision.get("title", "Human decision required"),
+                "context": pending_decision.get("context", data),
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+                "available_actions": [
+                    _wire_id("act", action_id)
+                    for action_id in pending_decision.get("available_actions", [])
+                ],
+            }
+            new_state[_PENDING_DECISION_KEY] = prepared_decision
             run.state = new_state
-            run.status = RunStatus.DECISION_REQUIRED.value
+            run.status = StoredRunStatus.DECISION_REQUIRED.value
             await self._append_event(
                 run,
                 RunEventType.DECISION_REQUIRED,
-                {"step_id": step_id, "pending_decision": pending_decision},
+                {"step_id": step_id, "pending_decision": prepared_decision},
             )
             await self.session.commit()
             await self.session.refresh(run)
@@ -99,7 +144,7 @@ class RunEngine:
 
         next_step = flow.next_step(step_id)
         if next_step is None:
-            run.status = RunStatus.COMPLETED.value
+            run.status = StoredRunStatus.COMPLETED.value
             run.current_step_id = None
             await self._append_event(run, RunEventType.RUN_COMPLETED, {})
         else:
@@ -121,8 +166,10 @@ class RunEngine:
         Rechaza en vivo si el `stateVersion` quedó stale o la acción no está
         entre las disponibles (paso 3.4)."""
         run = await self._get_run_or_raise(run_id)
-        if run.status != RunStatus.DECISION_REQUIRED.value:
+        if run.status != StoredRunStatus.DECISION_REQUIRED.value:
             raise RunEngineError(f"Run {run_id} no tiene una decisión pendiente")
+
+        action_id = _wire_id("act", action_id)
 
         if run.state_version != state_version:
             await self._append_event(
@@ -158,7 +205,7 @@ class RunEngine:
         new_state["last_decision"] = {"action_id": action_id, "payload": payload}
         run.state = new_state
         run.state_version += 1
-        run.status = RunStatus.RUNNING.value
+        run.status = StoredRunStatus.RUNNING.value
 
         await self._append_event(run, RunEventType.ACTION_ACCEPTED, {"action_id": action_id, "payload": payload})
         await self._append_event(run, RunEventType.RUN_RESUMED, {"action_id": action_id})
@@ -176,19 +223,98 @@ class RunEngine:
     async def get_projection(self, run_id: uuid.UUID) -> RunProjection:
         run = await self._get_run_or_raise(run_id)
         version_row = await self.flow_engine.get_version_by_id(run.workflow_version_id)
-        pending = run.state.get(_PENDING_DECISION_KEY) if run.status == RunStatus.DECISION_REQUIRED.value else None
+        if version_row is None:
+            raise RunEngineError(f"WorkflowVersion {run.workflow_version_id} no existe")
+
+        flow = self.flow_engine.to_flow_definition(version_row)
+        pending = (
+            run.state.get(_PENDING_DECISION_KEY)
+            if run.status == StoredRunStatus.DECISION_REQUIRED.value
+            else None
+        )
+        available_actions = [
+            _action_definition(action_id)
+            for action_id in (pending or {}).get("available_actions", [])
+        ]
+        wire_run_id = _wire_id("run", run.id)
+        wire_workflow_id = _wire_id("wf", run.workflow_id)
+
+        event_rows = await self.export_events(run.id)
+        recent_events = [
+            RunEvent(
+                event_id=_wire_id("evt", row.id),
+                run_id=wire_run_id,
+                workflow_id=wire_workflow_id,
+                workflow_version=version_row.version,
+                sequence=sequence,
+                state_version=row.state_version,
+                type=row.type,
+                step_id=(
+                    _wire_id("step", row.payload["step_id"])
+                    if isinstance(row.payload, dict) and row.payload.get("step_id")
+                    else None
+                ),
+                payload=row.payload,
+                timestamp=row.created_at,
+            )
+            for sequence, row in enumerate(event_rows, start=1)
+        ]
+
+        current_step = None
+        if run.current_step_id is not None:
+            step = flow.step_by_id(run.current_step_id)
+            if step is None:
+                raise RunEngineError(
+                    f"Step {run.current_step_id} no existe en WorkflowVersion "
+                    f"{run.workflow_version_id}"
+                )
+            current_step = RunStepProjection(
+                id=_wire_id("step", step.id),
+                type=step.type,
+                title=step.title,
+                objective=step.objective,
+                status=(
+                    "attention"
+                    if run.status == StoredRunStatus.DECISION_REQUIRED.value
+                    else "active"
+                ),
+                metadata={
+                    "inputs": step.inputs,
+                    "requiresHumanReview": step.requires_human_review,
+                },
+            )
+
+        pending_request = None
+        if pending:
+            pending_request = DecisionRequest(
+                decision_id=_wire_id(
+                    "dec", pending.get("decision_id", f"{run.id}-{run.state_version}")
+                ),
+                step_id=_wire_id(
+                    "step", pending.get("step_id", run.current_step_id or "unknown")
+                ),
+                title=pending.get("title", "Human decision required"),
+                prompt=pending["prompt"],
+                context=pending.get("context", {}),
+                requested_at=pending.get("requested_at", run.updated_at),
+            )
+
         return RunProjection(
-            run_id=run.id,
-            workflow_id=run.workflow_id,
-            workflow_version=version_row.version if version_row else 0,
-            status=RunStatus(run.status),
-            current_step_id=run.current_step_id,
-            state={k: v for k, v in run.state.items() if k != _PENDING_DECISION_KEY},
-            pending_decision=PendingDecision(**pending) if pending else None,
-            available_actions=(pending or {}).get("available_actions", []),
+            run_id=wire_run_id,
+            workflow_id=wire_workflow_id,
+            workflow_version=version_row.version,
             state_version=run.state_version,
-            ui=None,
-            updated_at=run.updated_at,
+            last_sequence=len(event_rows),
+            status=_projection_status(run.status),
+            current_step=current_step,
+            operation={
+                key: value
+                for key, value in run.state.items()
+                if key != _PENDING_DECISION_KEY
+            },
+            recent_events=recent_events[-50:],
+            pending_decision=pending_request,
+            available_actions=available_actions,
         )
 
     async def get_run(self, run_id: uuid.UUID) -> RunModel:

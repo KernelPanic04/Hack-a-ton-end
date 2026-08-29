@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.demo.provider import MockProvider, MockProviderError
 from app.models.run import RunModel
 from app.runtime.run import RunEngine
-from app.schemas.contracts import RunStatus
+from app.runtime.status import StoredRunStatus
 
 
 class DemoDriverError(Exception):
@@ -37,7 +37,7 @@ class DemoDriver:
         una decisión humana o ya terminó, falla explícitamente en vez de
         saltarse o reintentar el paso — esa decisión no es del driver."""
         run = await self.run_engine.get_run(run_id)
-        if run.status != RunStatus.RUNNING.value:
+        if run.status != StoredRunStatus.RUNNING.value:
             raise DemoDriverError(
                 f"Run {run_id} no está corriendo (status={run.status}); "
                 "el demo driver no avanza runs pausados o terminados"
