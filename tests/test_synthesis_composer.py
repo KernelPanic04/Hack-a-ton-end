@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 from time import perf_counter
 import unittest
 
@@ -7,12 +8,24 @@ from app.schemas.contracts import (
     DecisionRequest,
     RunProjection,
     RunStepProjection,
+    UISpec,
 )
 from app.synthesis import DeterministicComposer
 from app.synthesis.composer import compose
 
 
 NOW = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
+RECORDED_FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "app"
+    / "demo"
+    / "fixtures"
+    / "run_projection_pending_decision.json"
+)
+
+
+def recorded_projection() -> RunProjection:
+    return RunProjection.model_validate_json(RECORDED_FIXTURE.read_text(encoding="utf-8"))
 
 
 def projection(*, attention: bool = False, decision: bool = False) -> RunProjection:
@@ -56,6 +69,16 @@ def projection(*, attention: bool = False, decision: bool = False) -> RunProject
 
 
 class DeterministicComposerTests(unittest.TestCase):
+    def test_recorded_projection_composes_to_a_pydantic_valid_ui_spec(self) -> None:
+        projection = recorded_projection()
+        spec = compose(projection)
+        wire_spec = UISpec.model_validate_json(spec.model_dump_json(by_alias=True))
+
+        self.assertEqual(wire_spec.run_id, projection.run_id)
+        self.assertEqual(wire_spec.state_version, projection.state_version)
+        self.assertEqual(wire_spec.generated_by, "deterministic")
+        self.assertEqual(wire_spec.layout.children[1].id, "ui_decision")
+
     def test_object_api_is_exported_for_runtime_pipeline(self) -> None:
         spec = DeterministicComposer().compose(projection())
         self.assertEqual(spec.generated_by, "deterministic")
@@ -72,7 +95,7 @@ class DeterministicComposerTests(unittest.TestCase):
 
     def test_pending_decision_uses_a_decision_first_layout(self) -> None:
         spec = compose(projection(decision=True))
-        self.assertEqual(spec.layout.children[0].id, "ui_decision_section")
+        self.assertEqual(spec.layout.children[1].id, "ui_decision")
         self.assertEqual(spec.allowed_actions[0].action_id, "act_review")
 
     def test_composition_is_under_fifty_milliseconds_per_run(self) -> None:
