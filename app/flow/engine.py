@@ -5,6 +5,7 @@ paso 4.1 en Fase 4)."""
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Sequence
 
@@ -13,6 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.flow.models import FlowDefinition, StepDefinition
 from app.models.workflow import WorkflowDefinitionModel, WorkflowVersionModel
+
+
+logger = logging.getLogger(__name__)
 
 
 class FlowEngine:
@@ -36,15 +40,28 @@ class FlowEngine:
         self, workflow_id: uuid.UUID, steps: Sequence[StepDefinition]
     ) -> WorkflowVersionModel:
         next_version = await self._next_version_number(workflow_id)
+        definition = FlowDefinition(
+            workflow_id=str(workflow_id), version=next_version, steps=list(steps)
+        )
         version_row = WorkflowVersionModel(
             workflow_id=workflow_id,
             version=next_version,
-            steps=[step.model_dump() for step in steps],
+            steps=[step.model_dump() for step in definition.steps],
         )
         self.session.add(version_row)
         await self.session.commit()
         await self.session.refresh(version_row)
+        logger.info(
+            "workflow.version.created workflow_id=%s version=%s",
+            workflow_id,
+            version_row.version,
+        )
         return version_row
+
+    async def get_workflow_by_id(
+        self, workflow_id: uuid.UUID
+    ) -> WorkflowDefinitionModel | None:
+        return await self.session.get(WorkflowDefinitionModel, workflow_id)
 
     async def get_latest_version(self, workflow_id: uuid.UUID) -> WorkflowVersionModel | None:
         result = await self.session.execute(

@@ -215,7 +215,11 @@ class RunEngine:
 
         flow = await self._flow_for_run(run)
         next_step = flow.next_step(run.current_step_id)
-        if next_step is not None:
+        if next_step is None:
+            run.status = StoredRunStatus.COMPLETED.value
+            run.current_step_id = None
+            await self._append_event(run, RunEventType.RUN_COMPLETED, {})
+        else:
             run.current_step_id = next_step.id
             await self._append_event(run, RunEventType.STEP_STARTED, {"step_id": next_step.id})
 
