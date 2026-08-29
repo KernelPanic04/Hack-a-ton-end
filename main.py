@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from pydantic.alias_generators import to_camel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +12,14 @@ from app.core.database import engine, Base, get_db
 from app.demo.driver import DemoDriver, DemoDriverError
 from app.runtime.run import RunEngine, RunEngineError
 from app.runtime.pipeline import RuntimePipeline
-from app.schemas.contracts import RunEvent, RunProjection
+from app.schemas.contracts import (
+    ActionAcceptedEnvelope,
+    ActionSubmittedEnvelope,
+    RunEvent,
+    RunProjection,
+    UIUpdatedEnvelope,
+)
+from app.policy import ActionCoordinator
 from app.ws import RunWebSocketHub
 
 # Importante: cargar los modelos antes de crear tablas.
@@ -30,6 +37,8 @@ from app.models.run import RunModel, RunEventModel, HumanDecisionModel  # noqa: 
 DEFAULT_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
@@ -121,6 +130,26 @@ async def advance_demo(
         raise _runtime_error(exc) from exc
 
 
+@app.post("/demo/skeleton", response_model=RunProjection, tags=["Demo"])
+async def create_demo_skeleton(session: AsyncSession = Depends(get_db)) -> RunProjection:
+    """Crea un run ya pausado para demostrar Gate G1 en menos de 60 s.
+
+    Reutiliza el golden path real: crea el run y consume sus tres primeros
+    eventos hasta ``DECISION_REQUIRED``. El composer determinista produce el
+    árbol ``page → alert/decisionPanel/timeline/keyValue`` y el WebSocket lo
+    reenvía al conectarse mediante ``latest_envelope``.
+    """
+    driver = DemoDriver(session)
+    try:
+        run = await driver.start_new_run()
+        for _ in range(3):
+            run = await driver.advance(run.id)
+        await RuntimePipeline(session, app.state.ws_hub).publish_current(run.id)
+        return await driver.run_engine.get_projection(run.id)
+    except (RunEngineError, DemoDriverError) as exc:
+        raise _runtime_error(exc) from exc
+
+
 @app.get("/runs/{run_id}/projection", response_model=RunProjection, tags=["Runs"])
 async def get_run_projection(
     run_id: str, session: AsyncSession = Depends(get_db)
@@ -128,6 +157,29 @@ async def get_run_projection(
     """Snapshot para reconexión y polling; no depende del WebSocket."""
     try:
         return await RunEngine(session).get_projection(_run_uuid(run_id))
+    except RunEngineError as exc:
+        raise _runtime_error(exc) from exc
+
+
+@app.get(
+    "/runs/{run_id}/snapshot", response_model=UIUpdatedEnvelope, tags=["Runs"]
+)
+async def get_run_snapshot(
+    run_id: str, session: AsyncSession = Depends(get_db)
+) -> UIUpdatedEnvelope:
+    """Latest validated projection + UISpec for reconnect and polling."""
+    try:
+        run_uuid = _run_uuid(run_id)
+        await RunEngine(session).get_projection(run_uuid)
+        envelope = await RuntimePipeline(session, app.state.ws_hub).latest_envelope(
+            run_uuid
+        )
+        if envelope is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="El run todavía no tiene una UISpec persistida.",
+            )
+        return envelope
     except RunEngineError as exc:
         raise _runtime_error(exc) from exc
 
@@ -157,19 +209,43 @@ async def run_websocket(
     try:
         run_uuid = _run_uuid(run_id)
         wire_run_id = f"run_{run_uuid}"
+        await RunEngine(session).get_projection(run_uuid)
     except HTTPException:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    except RunEngineError:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
     hub: RunWebSocketHub = app.state.ws_hub
     await hub.connect(wire_run_id, websocket)
     try:
-        envelope = await RuntimePipeline(session, hub).latest_envelope(run_uuid)
+        pipeline = RuntimePipeline(session, hub)
+        envelope = await pipeline.latest_envelope(run_uuid)
         if envelope is not None:
             await websocket.send_json(envelope.model_dump(mode="json"))
         while True:
-            # ActionEvent handling is added with policy in Phase 3. Keeping
-            # the socket open now makes this a pure subscription transport.
-            await websocket.receive_text()
+            message = await websocket.receive_text()
+            try:
+                submitted = ActionSubmittedEnvelope.model_validate_json(message)
+            except ValidationError:
+                await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
+                return
+
+            if submitted.run_id != wire_run_id:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+
+            result = await ActionCoordinator(session).handle(submitted.payload, run_uuid)
+            if isinstance(result, ActionAcceptedEnvelope):
+                # ACTION_ACCEPTED is visible before the next deterministic UI
+                # snapshot, preserving the Phase 1 click feedback.
+                await hub.publish(result)
+                await pipeline.publish_current(run_uuid)
+            else:
+                # A rejection belongs only to the tab that submitted it.
+                await websocket.send_json(result.model_dump(mode="json"))
     except WebSocketDisconnect:
+        pass
+    finally:
         hub.disconnect(wire_run_id, websocket)

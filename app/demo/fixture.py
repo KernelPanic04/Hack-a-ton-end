@@ -109,3 +109,23 @@ SCRIPTED_EVENTS: list[dict[str, Any]] = [
         "verdict": "ok",
     },
 ]
+
+# Resultados del mock después de una decisión humana. El runtime guarda la
+# acción aceptada y el driver la entrega de vuelta al provider al ejecutar los
+# dos pasos restantes; así el curso del run cambia realmente según la decisión.
+DECISION_OUTCOMES: dict[str, dict[str, dict[str, Any]]] = {
+    "find_alternative": {
+        "route_resolution": {
+            "data": {"chosen_action": "find_alternative", "recovered_days": 6},
+            "verdict": "ok",
+        },
+        "delivery_eta": {"data": {"final_eta": "2026-09-15"}, "verdict": "ok"},
+    },
+    "accept_delay": {
+        "route_resolution": {
+            "data": {"chosen_action": "accept_delay", "recovered_days": 0},
+            "verdict": "attention",
+        },
+        "delivery_eta": {"data": {"final_eta": "2026-09-21"}, "verdict": "ok"},
+    },
+}

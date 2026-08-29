@@ -163,6 +163,7 @@ class RunEngine:
         action_id: str,
         payload: dict[str, Any],
         state_version: int,
+        idempotency_key: str | None = None,
     ) -> RunModel:
         """Aplica una decisión humana sobre un run pausado (objetivo Rol A #3).
         Rechaza en vivo si el `stateVersion` quedó stale o la acción no está
@@ -197,7 +198,7 @@ class RunEngine:
             HumanDecisionModel(
                 run_id=run.id,
                 action_id=action_id,
-                payload=payload,
+                payload={**payload, **({"_idempotency_key": idempotency_key} if idempotency_key else {})},
                 status="accepted",
                 resolved_at=datetime.now(timezone.utc),
             )
@@ -221,6 +222,19 @@ class RunEngine:
         await self.session.commit()
         await self.session.refresh(run)
         return run
+
+    async def record_action_rejection(
+        self, run_id: uuid.UUID, action_id: str, reason: str
+    ) -> RunEvent:
+        """Append a policy rejection without mutating the runtime state."""
+        run = await self._get_run_or_raise(run_id)
+        await self._append_event(
+            run,
+            RunEventType.ACTION_REJECTED,
+            {"action_id": _wire_id("act", action_id), "reason": reason},
+        )
+        await self.session.commit()
+        return (await self.get_event_log(run.id))[-1]
 
     async def get_projection(self, run_id: uuid.UUID) -> RunProjection:
         run = await self._get_run_or_raise(run_id)
@@ -358,6 +372,36 @@ class RunEngine:
             _wire_id("wf", run.workflow_id),
             version_row.version,
         )
+
+    async def record_action_rejection(
+        self,
+        run_id: uuid.UUID,
+        action_id: str,
+        reason: str,
+    ) -> RunEvent:
+        """Registra un rechazo de transporte/policy que no muta la proyección.
+
+        ``resolve_decision`` conserva sus validaciones de dominio. Este método
+        cubre rechazos previos (decisionId ajeno, payload no objeto, versiones
+        incompatibles) para que incluso el camino negativo sea append-only.
+        """
+        run = await self._get_run_or_raise(run_id)
+        await self._append_event(
+            run,
+            RunEventType.ACTION_REJECTED,
+            {"action_id": _wire_id("act", action_id), "reason": reason},
+        )
+        await self.session.commit()
+        return (await self.get_event_log(run.id))[-1]
+
+    async def latest_event(
+        self,
+        run_id: uuid.UUID,
+        event_type: RunEventType,
+    ) -> RunEvent | None:
+        """Devuelve el último evento wire de un tipo para construir envelopes."""
+        events = await self.get_event_log(run_id)
+        return next((event for event in reversed(events) if event.type == event_type.value), None)
 
     async def _get_run_or_raise(self, run_id: uuid.UUID) -> RunModel:
         run = await self.session.get(RunModel, run_id)

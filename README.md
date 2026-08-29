@@ -12,6 +12,7 @@ log append-only, fixture/demo driver y contratos Pydantic compartidos. Consulta
 | `app/flow/` | Definiciones y versiones inmutables de workflows |
 | `app/runtime/` | Ejecución, transiciones y proyección de runs |
 | `app/synthesis/` | Composer determinista de `RunProjection` a `UISpec` |
+| `app/policy/` | Validación declarativa y coordinación de acciones humanas |
 | `app/ws/` | Hub WebSocket en memoria por run y envelopes tipados |
 | `app/demo/` | Golden path, mock provider y demo driver |
 | `app/models/` | Tablas SQLAlchemy de workflows, runs, eventos y decisiones |
@@ -21,6 +22,18 @@ log append-only, fixture/demo driver y contratos Pydantic compartidos. Consulta
 La arquitectura Controller–Service–Repository del template anterior ya no es
 la estructura principal del runtime. Los módulos se organizan por capacidad del
 roadmap y comparten PostgreSQL dentro del mismo monolito modular.
+
+```mermaid
+flowchart LR
+    HTTP[POST /runs o /demo/advance] --> Engine[RunEngine + event log]
+    Engine --> Projection[RunProjection]
+    Projection --> Composer[Composer determinista]
+    Composer --> WS[UISpec por WebSocket]
+    WS --> Frontend[Renderer recursivo]
+    Frontend -->|ACTION_SUBMITTED| Policy[Policy + ActionCoordinator]
+    Policy -->|ACTION_ACCEPTED / ACTION_REJECTED| WS
+    Policy --> Engine
+```
 
 ## Requisitos
 
@@ -39,10 +52,45 @@ cp .env.example .env
 | `POSTGRES_PORT` | `5433` | Puerto de PostgreSQL publicado en el host |
 | `PORT` | `8000` | Puerto interno de FastAPI en el contenedor |
 | `DEMO_TOKEN` | placeholder | Token compartido del handshake WebSocket de demo |
-| `ALLOWED_ORIGINS` | frontend `5173`/`3000` | Lista CORS separada por comas |
+| `ALLOWED_ORIGINS` | frontend `5173`/`5174`/`3000` | Lista CORS separada por comas |
+| `OPENAI_API_KEY` | vacío | Activa el upgrade progresivo de `UISpec` |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | Modelo usado por Responses API |
+| `LLM_UPGRADE_ENABLED` | `true` | Kill switch; sin key siempre usa determinista |
 
 `DEMO_TOKEN` debe coincidir con `VITE_DEMO_TOKEN` del frontend. Es un control
 exclusivo de la demo, no una credencial de producción. Nunca commitees `.env`.
+
+## Fase 3 · decisión humana y síntesis progresiva
+
+Cada transición publica y persiste primero una `UISpec` determinista. Si
+`OPENAI_API_KEY` está disponible, `app/synthesis/llm.py` solicita después una
+mejora con structured outputs, timeout de 5 segundos y un retry. Pydantic
+revalida el árbol y el backend conserva bajo su autoridad IDs, versiones y
+`availableActions`; cualquier fallo mantiene intacta la UI determinista.
+
+`GET /runs/{id}/snapshot` devuelve el último envelope `UI_UPDATED` completo
+para reconexión y polling. El WebSocket sigue reproduciendo el mismo snapshot
+al conectarse y aplica el policy engine antes de aceptar una decisión.
+
+### Prueba manual de la mejora LLM
+
+Con `OPENAI_API_KEY` en `.env`, este comando realiza una sola llamada real
+contra la fixture grabada. Solo imprime modelo, latencia y el resultado de la
+validación; nunca muestra la clave ni el layout completo.
+
+```powershell
+.venv\Scripts\python.exe -m app.synthesis.smoke_llm
+```
+
+Para comprobar el flujo progresivo con Postman o Insomnia, crea un run con
+`POST /runs`, espera unos segundos y consulta:
+
+```text
+GET http://localhost:8000/runs/run_<uuid>/snapshot
+```
+
+El envelope tendrá `payload.uiSpec.generatedBy: "llm"` cuando el upgrade se
+publique; si el proveedor falla, el snapshot determinista permanece disponible.
 
 ## Inicio recomendado: backend completo con Docker
 
@@ -109,6 +157,7 @@ demo por HTTP. Los identificadores devueltos usan el formato wire (`run_<uuid>`)
 
 | Método | Ruta | Resultado |
 |---|---|---|
+| `POST` | `/demo/skeleton` | Crea un run en decisión pendiente y publica la `UISpec` mínima para verificar G1. |
 | `POST` | `/runs` | Crea el run v1 del golden path y devuelve su `RunProjection` inicial. |
 | `POST` | `/demo/advance` | Recibe `{"runId":"run_<uuid>"}`, aplica el siguiente evento guionizado y devuelve la proyección. |
 | `GET` | `/runs/{runId}/projection` | Devuelve el snapshot actual para polling/reconexión. |
@@ -129,6 +178,12 @@ persiste dentro del estado del run y emite `UI_UPDATED`. Al conectarse, el WS
 reproduce esa última actualización; el contrato congelado de `/projection`
 sigue devolviendo exclusivamente `RunProjection`.
 
+El socket también recibe `ACTION_SUBMITTED`. El handler contrasta run,
+workflow/state version, decisión pendiente, acción y payload; registra la
+decisión y responde `ACTION_ACCEPTED`, o agrega un evento append-only y devuelve
+`ACTION_REJECTED` con una razón legible. Una acción aceptada publica de inmediato
+la nueva `UI_UPDATED`.
+
 ## Pruebas
 
 ```bash
@@ -137,9 +192,20 @@ sigue devolviendo exclusivamente `RunProjection`.
 docker compose -f docker/docker-compose.yml config --quiet
 ```
 
-Las pruebas cubren invariantes de contratos, serialización camelCase, ausencia
-de `eventId` en `ActionEvent`, registry/mensajes congelados y adaptación del
-runtime actual a `RunProjection`.
+Con el stack levantado, el smoke reproducible verifica G1 y el golden path de
+cinco pasos hasta `completed`:
+
+```bash
+.venv/bin/python scripts/smoke_phase2.py \
+  --base-url http://127.0.0.1:8000 \
+  --token "$DEMO_TOKEN"
+.venv/bin/python scripts/smoke_phase3.py \
+  --base-url http://127.0.0.1:8000 \
+  --token "$DEMO_TOKEN"
+```
+
+Las pruebas cubren contratos, composer, policy, pipeline, demo driver,
+decisiones por WS, rechazo stale, event log y adaptación a `RunProjection`.
 
 ## Apagado
 
