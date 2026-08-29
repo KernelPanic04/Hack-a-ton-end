@@ -97,6 +97,16 @@ Install the Python dependencies:
 pip install -r requirements.txt
 ```
 
+## Frozen runtime contracts (Phase 0)
+
+The executable v1 contracts are defined in `app/schemas/contracts.py`. They
+cover `RunEvent`, `RunProjection`, `UISpec`, `ActionEvent`, the nine allowed UI
+nodes, and the typed WebSocket envelope. Pydantic is the contract authority;
+the frontend keeps a reviewed TypeScript mirror at `src/runtime/contracts.ts`.
+
+`ActionEvent` deliberately has no client-created `eventId`. The backend assigns
+event IDs after policy and idempotency validation.
+
 ---
 
 ## 🏃 Run the Backend Locally
@@ -104,8 +114,12 @@ pip install -r requirements.txt
 ### 1. Start PostgreSQL and FastAPI
 
 ```bash
+cp .env.example .env
 docker compose -f docker/docker-compose.yml up -d
 ```
+
+If port 8000 is already in use, set `BACKEND_PORT` in `.env` (for example,
+`BACKEND_PORT=18000`) without editing the compose file.
 
 The backend will be available at:
 
