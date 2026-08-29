@@ -11,6 +11,8 @@ log append-only, fixture/demo driver y contratos Pydantic compartidos. Consulta
 |---|---|
 | `app/flow/` | Definiciones y versiones inmutables de workflows |
 | `app/runtime/` | Ejecución, transiciones y proyección de runs |
+| `app/synthesis/` | Composer determinista de `RunProjection` a `UISpec` |
+| `app/ws/` | Hub WebSocket en memoria por run y envelopes tipados |
 | `app/demo/` | Golden path, mock provider y demo driver |
 | `app/models/` | Tablas SQLAlchemy de workflows, runs, eventos y decisiones |
 | `app/schemas/contracts.py` | Contrato v1 ejecutable para backend/frontend/WS |
@@ -99,6 +101,33 @@ cambias `POSTGRES_PORT`, define una `DATABASE_URL` equivalente para Uvicorn.
 
 El runtime conserva UUIDs y step IDs internos; `RunEngine.get_projection()` los
 adapta al contrato wire sin cambiar la persistencia de la arquitectura nueva.
+
+## HTTP del runtime (Rol A)
+
+Estos endpoints no dependen del WebSocket y permiten conducir y recuperar la
+demo por HTTP. Los identificadores devueltos usan el formato wire (`run_<uuid>`).
+
+| Método | Ruta | Resultado |
+|---|---|---|
+| `POST` | `/runs` | Crea el run v1 del golden path y devuelve su `RunProjection` inicial. |
+| `POST` | `/demo/advance` | Recibe `{"runId":"run_<uuid>"}`, aplica el siguiente evento guionizado y devuelve la proyección. |
+| `GET` | `/runs/{runId}/projection` | Devuelve el snapshot actual para polling/reconexión. |
+| `GET` | `/runs/{runId}/events` | Devuelve el event log append-only completo como `RunEvent[]`. |
+| `WS` | `/ws/runs/{runId}?token=<DEMO_TOKEN>` | Reproduce la última `UI_UPDATED` y emite las transiciones posteriores. |
+
+Ejemplo de avance:
+
+```bash
+curl -X POST http://localhost:8000/runs
+curl -X POST http://localhost:8000/demo/advance \
+  -H 'content-type: application/json' \
+  -d '{"runId":"run_<uuid-devuelto>"}'
+```
+
+Tras crear o avanzar un run, el pipeline determinista compone una `UISpec`, la
+persiste dentro del estado del run y emite `UI_UPDATED`. Al conectarse, el WS
+reproduce esa última actualización; el contrato congelado de `/projection`
+sigue devolviendo exclusivamente `RunProjection`.
 
 ## Pruebas
 
