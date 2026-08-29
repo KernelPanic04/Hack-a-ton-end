@@ -72,6 +72,26 @@ revalida el árbol y el backend conserva bajo su autoridad IDs, versiones y
 para reconexión y polling. El WebSocket sigue reproduciendo el mismo snapshot
 al conectarse y aplica el policy engine antes de aceptar una decisión.
 
+### Prueba manual de la mejora LLM
+
+Con `OPENAI_API_KEY` en `.env`, este comando realiza una sola llamada real
+contra la fixture grabada. Solo imprime modelo, latencia y el resultado de la
+validación; nunca muestra la clave ni el layout completo.
+
+```powershell
+.venv\Scripts\python.exe -m app.synthesis.smoke_llm
+```
+
+Para comprobar el flujo progresivo con Postman o Insomnia, crea un run con
+`POST /runs`, espera unos segundos y consulta:
+
+```text
+GET http://localhost:8000/runs/run_<uuid>/snapshot
+```
+
+El envelope tendrá `payload.uiSpec.generatedBy: "llm"` cuando el upgrade se
+publique; si el proveedor falla, el snapshot determinista permanece disponible.
+
 ## Inicio recomendado: backend completo con Docker
 
 Desde la raíz del repositorio:
