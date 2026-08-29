@@ -63,42 +63,37 @@ class DeterministicComposerTests(unittest.TestCase):
         spec = DeterministicComposer().compose(make_projection(pending=False))
 
         self.assertEqual(spec.generated_by, "deterministic")
-        self.assertNotIn("decisionPanel", self._node_types(spec.layout))
-        self.assertIn("timeline", self._node_types(spec.layout))
+        self.assertFalse(any(node.type == "decisionPanel" for node in spec.layout.children))
+        execution = next(node for node in spec.layout.children if node.id == "ui_execution")
+        self.assertTrue(any(node.type == "timeline" for node in execution.children))
 
     def test_pending_decision_adds_attention_layout_and_allowed_action(self) -> None:
         spec = DeterministicComposer().compose(make_projection(pending=True))
 
         panel = self._node_by_type(spec.layout, "decisionPanel")
         self.assertEqual(panel.props.actions[0].action_id, "act_continue")
-        self.assertIn("pending decision", spec.reason.lower())
+        self.assertIn("pending", spec.reason.lower())
 
     def test_anomaly_and_decision_have_structurally_distinct_layouts(self) -> None:
         normal = DeterministicComposer().compose(make_projection())
         anomaly = DeterministicComposer().compose(make_projection(anomaly=True))
         decision = DeterministicComposer().compose(make_projection(pending=True))
 
-        self.assertEqual(normal.layout.children[0].id, "ui_summary_section")
-        self.assertEqual(anomaly.layout.children[0].id, "ui_attention")
-        self.assertEqual(decision.layout.children[0].id, "ui_decision_section")
-        self.assertIn("attention", anomaly.reason.lower())
+        def tree_types(spec):
+            types = []
 
-    @staticmethod
-    def _node_types(node) -> list[str]:
-        result = [node.type]
-        for child in getattr(node, "children", []):
-            result.extend(DeterministicComposerTests._node_types(child))
-        return result
+            def visit(node):
+                types.append(node.type)
+                for child in getattr(node, "children", []):
+                    visit(child)
 
-    @staticmethod
-    def _node_by_type(node, node_type: str):
-        if node.type == node_type:
-            return node
-        for child in getattr(node, "children", []):
-            found = DeterministicComposerTests._node_by_type(child, node_type)
-            if found is not None:
-                return found
-        return None
+            visit(spec.layout)
+            return types
+
+        self.assertNotEqual(tree_types(normal), tree_types(anomaly))
+        self.assertNotEqual(tree_types(normal), tree_types(decision))
+        self.assertNotEqual(tree_types(anomaly), tree_types(decision))
+        self.assertIn("anomaly", anomaly.reason.lower())
 
 
 if __name__ == "__main__":

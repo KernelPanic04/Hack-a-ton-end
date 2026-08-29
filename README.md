@@ -22,6 +22,19 @@ La arquitectura Controller–Service–Repository del template anterior ya no es
 la estructura principal del runtime. Los módulos se organizan por capacidad del
 roadmap y comparten PostgreSQL dentro del mismo monolito modular.
 
+```mermaid
+flowchart LR
+    HTTP[POST /runs o /demo/advance] --> Engine[RunEngine + event log]
+    Engine --> Projection[RunProjection]
+    Projection --> Composer[Composer determinista]
+    Composer --> UI[UISpec persistida]
+    UI --> WS[Hub WebSocket]
+    WS --> Frontend[Renderer recursivo]
+    Frontend -->|ACTION_SUBMITTED| Actions[RuntimeActionHandler]
+    Actions -->|ACTION_ACCEPTED / ACTION_REJECTED| WS
+    Actions --> Engine
+```
+
 ## Requisitos
 
 - Docker con Docker Compose para el flujo recomendado.
@@ -39,7 +52,7 @@ cp .env.example .env
 | `POSTGRES_PORT` | `5433` | Puerto de PostgreSQL publicado en el host |
 | `PORT` | `8000` | Puerto interno de FastAPI en el contenedor |
 | `DEMO_TOKEN` | placeholder | Token compartido del handshake WebSocket de demo |
-| `ALLOWED_ORIGINS` | frontend `5173`/`3000` | Lista CORS separada por comas |
+| `ALLOWED_ORIGINS` | frontend `5173`/`5174`/`3000` | Lista CORS separada por comas |
 
 `DEMO_TOKEN` debe coincidir con `VITE_DEMO_TOKEN` del frontend. Es un control
 exclusivo de la demo, no una credencial de producción. Nunca commitees `.env`.
@@ -109,6 +122,7 @@ demo por HTTP. Los identificadores devueltos usan el formato wire (`run_<uuid>`)
 
 | Método | Ruta | Resultado |
 |---|---|---|
+| `POST` | `/demo/skeleton` | Crea un run en decisión pendiente y publica la `UISpec` mínima para verificar G1. |
 | `POST` | `/runs` | Crea el run v1 del golden path y devuelve su `RunProjection` inicial. |
 | `POST` | `/demo/advance` | Recibe `{"runId":"run_<uuid>"}`, aplica el siguiente evento guionizado y devuelve la proyección. |
 | `GET` | `/runs/{runId}/projection` | Devuelve el snapshot actual para polling/reconexión. |
@@ -129,15 +143,11 @@ persiste dentro del estado del run y emite `UI_UPDATED`. Al conectarse, el WS
 reproduce esa última actualización; el contrato congelado de `/projection`
 sigue devolviendo exclusivamente `RunProjection`.
 
-## Decisiones humanas por WebSocket
-
-Cuando la proyección contiene `pendingDecision`, el cliente envía un envelope
-`ACTION_SUBMITTED` cuyo `payload` es el `ActionEvent` congelado. El backend
-valida token del handshake, run, versión de workflow, decisión, `stateVersion`,
-acción permitida, payload e `idempotencyKey`; después emite `ACTION_ACCEPTED`
-seguido de `UI_UPDATED`. Una acción inválida recibe `ACTION_REJECTED` con un
-motivo legible y la versión actual. La validación no se expone por HTTP para
-evitar dos rutas de autoridad para la misma decisión.
+El socket también recibe `ACTION_SUBMITTED`. El handler contrasta run,
+workflow/state version, decisión pendiente, acción y payload; registra la
+decisión y responde `ACTION_ACCEPTED`, o agrega un evento append-only y devuelve
+`ACTION_REJECTED` con una razón legible. Una acción aceptada publica de inmediato
+la nueva `UI_UPDATED`.
 
 ## Pruebas
 
@@ -147,9 +157,17 @@ evitar dos rutas de autoridad para la misma decisión.
 docker compose -f docker/docker-compose.yml config --quiet
 ```
 
-Las pruebas cubren invariantes de contratos, serialización camelCase, ausencia
-de `eventId` en `ActionEvent`, registry/mensajes congelados y adaptación del
-runtime actual a `RunProjection`.
+Con el stack levantado, el smoke reproducible verifica G1 y el golden path de
+cinco pasos hasta `completed`:
+
+```bash
+.venv/bin/python scripts/smoke_phase2.py \
+  --base-url http://127.0.0.1:8000 \
+  --token "$DEMO_TOKEN"
+```
+
+Las pruebas cubren contratos, composer, pipeline, endpoints, decisiones por WS,
+rechazo stale, event log y adaptación del runtime a `RunProjection`.
 
 ## Apagado
 
