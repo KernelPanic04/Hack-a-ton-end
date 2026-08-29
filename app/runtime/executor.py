@@ -1,0 +1,153 @@
+"""Domain-neutral executor for workflow steps created at runtime (Phase 4)."""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from app.flow.models import StepDefinition
+from app.runtime.run import RunEngine, RunEngineError
+from app.runtime.status import StoredRunStatus
+from app.schemas.contracts import CompareProps, CompareRow
+from app.synthesis.generic_step import GenericStepLLMExecutor
+
+
+class GenericStepExecutor:
+    """Resolve a step's declared inputs from run state and reduce its result.
+
+    No step type is hard-coded here. Values remain visible under the completed
+    step's ``data.resolved_inputs`` state, which the deterministic composer
+    renders with its generic ``keyValue`` primitive.
+    """
+
+    def __init__(
+        self,
+        session: Any,
+        engine: RunEngine | None = None,
+        llm_executor: GenericStepLLMExecutor | None = None,
+    ) -> None:
+        self.engine = engine or RunEngine(session)
+        self.llm_executor = llm_executor or GenericStepLLMExecutor()
+
+    async def execute_current(self, run_id: uuid.UUID):
+        run = await self.engine.get_run(run_id)
+        if run.status != StoredRunStatus.RUNNING.value:
+            raise RunEngineError(f"Run {run_id} no está corriendo (status={run.status})")
+        if run.current_step_id is None:
+            raise RunEngineError(f"Run {run_id} no tiene un paso actual")
+
+        version = await self.engine.flow_engine.get_version_by_id(run.workflow_version_id)
+        if version is None:
+            raise RunEngineError(f"WorkflowVersion {run.workflow_version_id} no existe")
+        flow = self.engine.flow_engine.to_flow_definition(version)
+        step = flow.step_by_id(run.current_step_id)
+        if step is None:
+            raise RunEngineError(f"Step {run.current_step_id} no existe en el workflow")
+
+        data, has_missing_inputs = self._result_data(step, run.state)
+        llm_result = await self.llm_executor.analyze(
+            objective=step.objective,
+            resolved_inputs=data["resolved_inputs"],
+            missing_inputs=data["missing_inputs"],
+        )
+        if llm_result is not None:
+            data.update(llm_result.model_dump(mode="json", by_alias=True))
+        if data.get("comparison") is None:
+            comparison = self._deterministic_comparison(data["resolved_inputs"])
+            if comparison is not None:
+                data["comparison"] = comparison.model_dump(mode="json", by_alias=True)
+        needs_review = step.requires_human_review
+        pending_decision = None
+        if needs_review:
+            pending_decision = {
+                "title": f"Review: {step.title}",
+                "prompt": step.objective,
+                "context": data,
+                "available_actions": ["acknowledge"],
+            }
+
+        verdict = "attention" if needs_review or has_missing_inputs else "ok"
+        if llm_result is not None and llm_result.verdict in {"attention", "fail"}:
+            verdict = "attention"
+        return await self.engine.advance(
+            run_id,
+            step.id,
+            data,
+            verdict,
+            pending_decision=pending_decision,
+        )
+
+    @staticmethod
+    def _result_data(step: StepDefinition, state: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        resolved: dict[str, Any] = {}
+        missing: list[str] = []
+        for index, input_path in enumerate(step.inputs, start=1):
+            found, value = GenericStepExecutor._resolve_path(state, input_path)
+            key = f"input_{index}"
+            if found:
+                resolved[key] = {"source": input_path, "value": value}
+            else:
+                missing.append(input_path)
+
+        return (
+            {
+                "summary": step.objective,
+                "resolved_inputs": resolved,
+                "missing_inputs": missing,
+            },
+            bool(missing),
+        )
+
+    @staticmethod
+    def _resolve_path(state: dict[str, Any], path: str) -> tuple[bool, Any]:
+        """Resolve dotted input paths without any domain-specific mappings."""
+        current: Any = state
+        for segment in path.split("."):
+            if not isinstance(current, dict) or segment not in current:
+                return False, None
+            current = current[segment]
+        return True, current
+
+    @staticmethod
+    def _deterministic_comparison(
+        resolved_inputs: dict[str, Any],
+    ) -> CompareProps | None:
+        """Build a neutral comparison when a generic step has two numbers.
+
+        The executor never assumes a larger number is an improvement: without
+        domain semantics, the only trustworthy conclusion is that values are
+        equal or changed. A validated LLM comparison remains preferred.
+        """
+        numeric_inputs: list[tuple[str, str, int | float]] = []
+        for key, item in resolved_inputs.items():
+            if not isinstance(item, dict):
+                continue
+            value = item.get("value")
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            source = item.get("source")
+            if not isinstance(source, str):
+                continue
+            numeric_inputs.append((key, source, value))
+            if len(numeric_inputs) == 2:
+                break
+
+        if len(numeric_inputs) != 2:
+            return None
+
+        left_key, left_source, before = numeric_inputs[0]
+        right_key, right_source, after = numeric_inputs[1]
+        return CompareProps(
+            title="Resolved numeric inputs",
+            left_label=left_source,
+            right_label=right_source,
+            rows=[
+                CompareRow(
+                    key=f"{left_key}_to_{right_key}",
+                    label="Resolved value",
+                    before=before,
+                    after=after,
+                    outcome="same" if before == after else "changed",
+                )
+            ],
+        )

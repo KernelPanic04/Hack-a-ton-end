@@ -78,6 +78,16 @@ async def submit_visible_action(socket, ui_envelope: dict[str, Any]) -> dict[str
 
 async def smoke(base_url: str, token: str) -> dict[str, Any]:
     skeleton = request_json(base_url, "POST", "/demo/skeleton")
+    skeleton_snapshot = request_json(
+        base_url, "GET", f"/runs/{skeleton['runId']}/snapshot"
+    )
+    assert skeleton_snapshot["type"] == "UI_UPDATED"
+    assert skeleton_snapshot["payload"]["projection"]["runId"] == skeleton["runId"]
+    assert skeleton_snapshot["payload"]["uiSpec"]["generatedBy"] in {
+        "deterministic",
+        "llm",
+        "fallback",
+    }
     async with connect(websocket_url(base_url, skeleton["runId"], token)) as socket:
         skeleton_ui = await receive_type(socket, "UI_UPDATED")
         types = tree_types(skeleton_ui["payload"]["uiSpec"]["layout"])
@@ -126,6 +136,7 @@ async def smoke(base_url: str, token: str) -> dict[str, Any]:
         "gateG1": "passed",
         "goldenPath": "completed",
         "runId": projection["runId"],
+        "snapshot": "passed",
         "states": observed_states,
     }
 

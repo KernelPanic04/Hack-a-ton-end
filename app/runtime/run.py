@@ -171,8 +171,11 @@ class RunEngine:
         run = await self._get_run_or_raise(run_id)
         if run.status != StoredRunStatus.DECISION_REQUIRED.value:
             raise RunEngineError(f"Run {run_id} no tiene una decisión pendiente")
+        if run.current_step_id is None:
+            raise RunEngineError(f"Run {run_id} no tiene un paso pendiente de revisión")
 
         action_id = _wire_id("act", action_id)
+        reviewed_step_id = run.current_step_id
 
         if run.state_version != state_version:
             await self._append_event(
@@ -213,9 +216,23 @@ class RunEngine:
         await self._append_event(run, RunEventType.ACTION_ACCEPTED, {"action_id": action_id, "payload": payload})
         await self._append_event(run, RunEventType.RUN_RESUMED, {"action_id": action_id})
 
+        reviewed_step = new_state.get(reviewed_step_id, {})
+        reviewed_data = (
+            reviewed_step.get("data", {}) if isinstance(reviewed_step, dict) else {}
+        )
+        await self._append_event(
+            run,
+            RunEventType.STEP_COMPLETED,
+            {"step_id": reviewed_step_id, "data": reviewed_data},
+        )
+
         flow = await self._flow_for_run(run)
-        next_step = flow.next_step(run.current_step_id)
-        if next_step is not None:
+        next_step = flow.next_step(reviewed_step_id)
+        if next_step is None:
+            run.status = StoredRunStatus.COMPLETED.value
+            run.current_step_id = None
+            await self._append_event(run, RunEventType.RUN_COMPLETED, {})
+        else:
             run.current_step_id = next_step.id
             await self._append_event(run, RunEventType.STEP_STARTED, {"step_id": next_step.id})
 

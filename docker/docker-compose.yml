@@ -25,6 +25,11 @@ services:
       DATABASE_URL: postgresql+asyncpg://hack_user:hack_password@postgres:5432/hackathon_db
       DEMO_TOKEN: ${DEMO_TOKEN:-replace-with-a-shared-demo-token}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
+      LLM_UPGRADE_ENABLED: ${LLM_UPGRADE_ENABLED:-true}
+      GENERIC_STEP_LLM_ENABLED: ${GENERIC_STEP_LLM_ENABLED:-true}
+      SQL_ECHO: ${SQL_ECHO:-false}
       PORT: ${PORT:-8000}
     ports:
       - "${BACKEND_PORT:-8000}:${PORT:-8000}"

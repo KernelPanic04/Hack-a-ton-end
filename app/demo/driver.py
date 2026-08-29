@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.demo.provider import MockProvider, MockProviderError
 from app.models.run import RunModel
+from app.runtime.executor import GenericStepExecutor
 from app.runtime.run import RunEngine
 from app.runtime.status import StoredRunStatus
 
@@ -51,7 +52,11 @@ class DemoDriver:
                 run.current_step_id, action_id=decision.get("action_id")
             )
         except MockProviderError as exc:
-            raise DemoDriverError(str(exc)) from exc
+            # A step added through POST /workflows/{id}/versions has no demo
+            # fixture by design. Execute it from its definition and state.
+            if "evento guionizado" not in str(exc):
+                raise DemoDriverError(str(exc)) from exc
+            return await GenericStepExecutor(self.session, self.run_engine).execute_current(run_id)
 
         return await self.run_engine.advance(
             run_id,

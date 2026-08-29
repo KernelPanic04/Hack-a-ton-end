@@ -4,12 +4,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.alias_generators import to_camel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import engine, Base, get_db
 from app.demo.driver import DemoDriver, DemoDriverError
+from app.flow.models import StepDefinition
 from app.runtime.run import RunEngine, RunEngineError
 from app.runtime.pipeline import RuntimePipeline
 from app.schemas.contracts import (
@@ -17,6 +18,7 @@ from app.schemas.contracts import (
     ActionSubmittedEnvelope,
     RunEvent,
     RunProjection,
+    UIUpdatedEnvelope,
 )
 from app.policy import ActionCoordinator
 from app.ws import RunWebSocketHub
@@ -82,6 +84,30 @@ class DemoAdvanceRequest(BaseModel):
     run_id: str
 
 
+class CreateRunRequest(BaseModel):
+    """Optional target workflow version for the Phase 4 editor flow."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    workflow_version_id: str | None = None
+
+
+class WorkflowVersionCreateRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    steps: list[StepDefinition] = Field(min_length=1)
+    base_version: int | None = Field(default=None, ge=1)
+
+
+class WorkflowVersionResponse(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, serialize_by_alias=True)
+
+    workflow_id: str
+    workflow_version_id: str
+    version: int
+    steps: list[StepDefinition]
+
+
 def _run_uuid(run_id: str) -> uuid.UUID:
     """Acepta el ID wire ``run_<uuid>`` y UUID crudo para facilitar curl."""
     raw_id = run_id.removeprefix("run_")
@@ -89,6 +115,16 @@ def _run_uuid(run_id: str) -> uuid.UUID:
         return uuid.UUID(raw_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="runId inválido") from exc
+
+
+def _uuid_with_prefix(value: str, prefix: str, label: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value.removeprefix(f"{prefix}_"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"{label} inválido",
+        ) from exc
 
 
 def _runtime_error(exc: RunEngineError | DemoDriverError) -> HTTPException:
@@ -106,12 +142,73 @@ async def health():
 
 
 @app.post("/runs", response_model=RunProjection, status_code=status.HTTP_201_CREATED, tags=["Runs"])
-async def create_run(session: AsyncSession = Depends(get_db)) -> RunProjection:
-    """Crea un run nuevo del golden path y devuelve su snapshot inicial."""
+async def create_run(
+    request: CreateRunRequest | None = None,
+    session: AsyncSession = Depends(get_db),
+) -> RunProjection:
+    """Crea un run del golden path o de una versión creada por el editor."""
     driver = DemoDriver(session)
-    run = await driver.start_new_run()
+    try:
+        if request is not None and request.workflow_version_id is not None:
+            version_id = _uuid_with_prefix(
+                request.workflow_version_id, "wfv", "workflowVersionId"
+            )
+            version = await driver.run_engine.flow_engine.get_version_by_id(version_id)
+            if version is None:
+                raise RunEngineError(f"WorkflowVersion {version_id} no existe")
+            flow = driver.run_engine.flow_engine.to_flow_definition(version)
+            run = await driver.run_engine.start_run(version.workflow_id, version.id, flow)
+        else:
+            run = await driver.start_new_run()
+    except RunEngineError as exc:
+        raise _runtime_error(exc) from exc
     await RuntimePipeline(session, app.state.ws_hub).publish_current(run.id)
     return await driver.run_engine.get_projection(run.id)
+
+
+@app.post(
+    "/workflows/{workflow_id}/versions",
+    response_model=WorkflowVersionResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Workflows"],
+)
+async def create_workflow_version(
+    workflow_id: str,
+    request: WorkflowVersionCreateRequest,
+    session: AsyncSession = Depends(get_db),
+) -> WorkflowVersionResponse:
+    """Create immutable v(n+1) from editor-provided generic steps."""
+    from app.flow.engine import FlowEngine
+
+    engine = FlowEngine(session)
+    workflow_uuid = _uuid_with_prefix(workflow_id, "wf", "workflowId")
+    if await engine.get_workflow_by_id(workflow_uuid) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow no existe")
+
+    steps = list(request.steps)
+    if request.base_version is not None:
+        base_version = await engine.get_version(workflow_uuid, request.base_version)
+        if base_version is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Workflow v{request.base_version} no existe",
+            )
+        base_flow = engine.to_flow_definition(base_version)
+        steps = [*base_flow.steps, *steps]
+
+    try:
+        version = await engine.create_version(workflow_uuid, steps)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.errors(include_url=False),
+        ) from exc
+    return WorkflowVersionResponse(
+        workflow_id=f"wf_{workflow_uuid}",
+        workflow_version_id=f"wfv_{version.id}",
+        version=version.version,
+        steps=[StepDefinition.model_validate(step) for step in version.steps],
+    )
 
 
 @app.post("/demo/advance", response_model=RunProjection, tags=["Demo"])
@@ -156,6 +253,29 @@ async def get_run_projection(
     """Snapshot para reconexión y polling; no depende del WebSocket."""
     try:
         return await RunEngine(session).get_projection(_run_uuid(run_id))
+    except RunEngineError as exc:
+        raise _runtime_error(exc) from exc
+
+
+@app.get(
+    "/runs/{run_id}/snapshot", response_model=UIUpdatedEnvelope, tags=["Runs"]
+)
+async def get_run_snapshot(
+    run_id: str, session: AsyncSession = Depends(get_db)
+) -> UIUpdatedEnvelope:
+    """Latest validated projection + UISpec for reconnect and polling."""
+    try:
+        run_uuid = _run_uuid(run_id)
+        await RunEngine(session).get_projection(run_uuid)
+        envelope = await RuntimePipeline(session, app.state.ws_hub).latest_envelope(
+            run_uuid
+        )
+        if envelope is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="El run todavía no tiene una UISpec persistida.",
+            )
+        return envelope
     except RunEngineError as exc:
         raise _runtime_error(exc) from exc
 

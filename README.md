@@ -11,7 +11,7 @@ log append-only, fixture/demo driver y contratos Pydantic compartidos. Consulta
 |---|---|
 | `app/flow/` | Definiciones y versiones inmutables de workflows |
 | `app/runtime/` | Ejecución, transiciones y proyección de runs |
-| `app/synthesis/` | Composer determinista de `RunProjection` a `UISpec` |
+| `app/synthesis/` | Composer determinista/LLM y structured output de pasos genéricos |
 | `app/policy/` | Validación declarativa y coordinación de acciones humanas |
 | `app/ws/` | Hub WebSocket en memoria por run y envelopes tipados |
 | `app/demo/` | Golden path, mock provider y demo driver |
@@ -53,9 +53,95 @@ cp .env.example .env
 | `PORT` | `8000` | Puerto interno de FastAPI en el contenedor |
 | `DEMO_TOKEN` | placeholder | Token compartido del handshake WebSocket de demo |
 | `ALLOWED_ORIGINS` | frontend `5173`/`5174`/`3000` | Lista CORS separada por comas |
+| `OPENAI_API_KEY` | vacío | Activa el upgrade progresivo de `UISpec` |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | Modelo usado por Responses API |
+| `LLM_UPGRADE_ENABLED` | `true` | Kill switch; sin key siempre usa determinista |
+| `GENERIC_STEP_LLM_ENABLED` | `true` | Kill switch del análisis LLM para pasos creados en runtime |
+| `SQL_ECHO` | `false` | Activa explícitamente el log detallado de SQLAlchemy |
 
 `DEMO_TOKEN` debe coincidir con `VITE_DEMO_TOKEN` del frontend. Es un control
 exclusivo de la demo, no una credencial de producción. Nunca commitees `.env`.
+
+## Fase 3 · decisión humana y síntesis progresiva
+
+Cada transición publica y persiste primero una `UISpec` determinista. Si
+`OPENAI_API_KEY` está disponible, `app/synthesis/llm.py` solicita después una
+mejora con structured outputs, timeout de 5 segundos y un retry. Pydantic
+revalida el árbol y el backend conserva bajo su autoridad IDs, versiones y
+`availableActions`; cualquier fallo mantiene intacta la UI determinista.
+
+`GET /runs/{id}/snapshot` devuelve el último envelope `UI_UPDATED` completo
+para reconexión y polling. El WebSocket sigue reproduciendo el mismo snapshot
+al conectarse y aplica el policy engine antes de aceptar una decisión.
+
+### Prueba manual de la mejora LLM
+
+Con `OPENAI_API_KEY` en `.env`, este comando realiza una sola llamada real
+contra la fixture grabada. Solo imprime modelo, latencia y el resultado de la
+validación; nunca muestra la clave ni el layout completo.
+
+```powershell
+.venv\Scripts\python.exe -m app.synthesis.smoke_llm
+```
+
+Para comprobar el flujo progresivo con Postman o Insomnia, crea un run con
+`POST /runs`, espera unos segundos y consulta:
+
+```text
+GET http://localhost:8000/runs/run_<uuid>/snapshot
+```
+
+El envelope tendrá `payload.uiSpec.generatedBy: "llm"` cuando el upgrade se
+publique; si el proveedor falla, el snapshot determinista permanece disponible.
+
+## Fase 5 · fallbacks y freeze
+
+La API siempre persiste y publica primero una `UISpec` determinista a partir de
+`RunProjection`. Los upgrades externos son opcionales: con ambos kill switches
+en `false`, el golden path, las decisiones y los pasos genéricos siguen
+funcionando sin red ni clave de proveedor.
+
+```env
+LLM_UPGRADE_ENABLED=false
+GENERIC_STEP_LLM_ENABLED=false
+SQL_ECHO=false
+```
+
+El smoke HTTP verifica que un payload real produce un snapshot `UI_UPDATED`,
+que sus versiones coinciden y que el árbol solo usa los nueve tipos del
+registry. Acepta una URL directa del backend o el proxy `/api` del frontend:
+
+```bash
+.venv/bin/python scripts/smoke_phase5.py \
+  --base-url http://127.0.0.1:8000 \
+  --expected-generator deterministic \
+  --token "$DEMO_TOKEN"
+```
+
+Usa `--expected-generator llm` únicamente cuando `OPENAI_API_KEY` esté
+configurada y el upgrade progresivo deba formar parte de la prueba.
+
+## Fase 4 · trial-by-fire
+
+`POST /workflows/{workflowId}/versions` acepta `baseVersion` junto con los pasos
+nuevos. El backend copia esa versión inmutable y anexa las definiciones del
+request; así el paso inventado se ejecuta después del flow base y puede resolver
+rutas reales como `delivery_eta.data.final_eta`.
+
+Cuando el mock provider no reconoce el paso, `GenericStepExecutor` resuelve sus
+inputs desde el estado, produce el fallback determinista y usa el structured
+output LLM cuando está disponible. `requiresHumanReview` pausa el run con
+`act_acknowledge`; al aceptarlo, el paso registra `STEP_COMPLETED` antes de
+continuar o cerrar el run.
+
+El trial completo, incluido WebSocket, timeline, `UISpec` y export del event
+log, se reproduce con:
+
+```bash
+python scripts/smoke_phase4.py \
+  --base-url http://127.0.0.1:8000 \
+  --token "$DEMO_TOKEN"
+```
 
 ## Inicio recomendado: backend completo con Docker
 
@@ -124,6 +210,8 @@ demo por HTTP. Los identificadores devueltos usan el formato wire (`run_<uuid>`)
 |---|---|---|
 | `POST` | `/demo/skeleton` | Crea un run en decisión pendiente y publica la `UISpec` mínima para verificar G1. |
 | `POST` | `/runs` | Crea el run v1 del golden path y devuelve su `RunProjection` inicial. |
+| `POST` | `/runs` con `workflowVersionId` | Crea un run contra una versión inmutable específica. |
+| `POST` | `/workflows/{workflowId}/versions` | Crea v(n+1); con `baseVersion`, preserva el flow base y anexa los pasos nuevos. |
 | `POST` | `/demo/advance` | Recibe `{"runId":"run_<uuid>"}`, aplica el siguiente evento guionizado y devuelve la proyección. |
 | `GET` | `/runs/{runId}/projection` | Devuelve el snapshot actual para polling/reconexión. |
 | `GET` | `/runs/{runId}/events` | Devuelve el event log append-only completo como `RunEvent[]`. |
@@ -167,10 +255,18 @@ cinco pasos hasta `completed`:
 .venv/bin/python scripts/smoke_phase3.py \
   --base-url http://127.0.0.1:8000 \
   --token "$DEMO_TOKEN"
+.venv/bin/python scripts/smoke_phase4.py \
+  --base-url http://127.0.0.1:8000 \
+  --token "$DEMO_TOKEN"
+.venv/bin/python scripts/smoke_phase5.py \
+  --base-url http://127.0.0.1:8000 \
+  --expected-generator deterministic \
+  --token "$DEMO_TOKEN"
 ```
 
 Las pruebas cubren contratos, composer, policy, pipeline, demo driver,
-decisiones por WS, rechazo stale, event log y adaptación a `RunProjection`.
+decisiones por WS, rechazo stale, pasos inventados, revisión humana, event log
+y adaptación a `RunProjection`.
 
 ## Apagado
 
