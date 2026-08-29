@@ -178,19 +178,22 @@ def compose(projection: RunProjection) -> UISpec:
 
     page_children: list[Any]
     if projection.pending_decision is not None:
-        page_children = [_decision_section(projection)]
-        activity_children = [timeline]
-        if current is not None:
-            activity_children.insert(0, current)
-        page_children.append(
-            SectionNode(
-                id="ui_activity_section",
-                type="section",
-                props=SectionProps(title="Current activity", columns=1),
-                children=activity_children,
-            )
-        )
-        reason = "A pending decision makes the permitted human actions the primary layout."
+        page_children = [
+            AlertNode(
+                id="ui_attention",
+                type="alert",
+                props=AlertProps(
+                    title="Review required",
+                    message="The run is paused until a permitted action is selected.",
+                    emphasis="warning",
+                ),
+            ),
+            _decision_section(projection).children[0],
+            timeline,
+        ]
+        if context is not None:
+            page_children.append(context)
+        reason = "A pending review decision foregrounds the permitted human actions."
     elif attention:
         page_children = [
             AlertNode(
@@ -203,13 +206,13 @@ def compose(projection: RunProjection) -> UISpec:
                 ),
             ),
             SectionNode(
-                id="ui_activity_section",
+                id="ui_execution",
                 type="section",
                 props=SectionProps(title="Current activity", emphasis="warning"),
                 children=[node for node in (current, timeline) if node is not None],
             ),
         ]
-        reason = "An attention-level result changes the layout to foreground the alert."
+        reason = "An anomaly-level result changes the layout to foreground the alert."
     else:
         page_children = [
             SectionNode(
@@ -230,7 +233,7 @@ def compose(projection: RunProjection) -> UISpec:
                 ],
             ),
             SectionNode(
-                id="ui_activity_section",
+                id="ui_execution",
                 type="section",
                 props=SectionProps(title="Activity"),
                 children=[timeline],
@@ -239,14 +242,8 @@ def compose(projection: RunProjection) -> UISpec:
         reason = "A stable run uses a summary-first layout with activity context."
 
     if context is not None:
-        page_children.append(
-            SectionNode(
-                id="ui_context_section",
-                type="section",
-                props=SectionProps(title="Context"),
-                children=[context],
-            )
-        )
+        if not attention and projection.pending_decision is None:
+            page_children.append(context)
 
     return UISpec(
         run_id=projection.run_id,

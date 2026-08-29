@@ -1,0 +1,79 @@
+{
+  "schemaVersion": "1",
+  "runId": "run_fixture_001",
+  "workflowId": "wf_fixture",
+  "workflowVersion": 1,
+  "stateVersion": 3,
+  "lastSequence": 2,
+  "status": "paused",
+  "currentStep": {
+    "id": "step_validate_data",
+    "type": "validate_data",
+    "title": "Validate data",
+    "objective": "Assess the available values before continuing.",
+    "status": "attention",
+    "metadata": {
+      "requiresHumanReview": true,
+      "inputs": [
+        "record_count"
+      ]
+    }
+  },
+  "operation": {
+    "validation": {
+      "record_count": 3,
+      "verdict": "attention"
+    }
+  },
+  "recentEvents": [
+    {
+      "schemaVersion": "1",
+      "eventId": "evt_fixture_001",
+      "runId": "run_fixture_001",
+      "workflowId": "wf_fixture",
+      "workflowVersion": 1,
+      "sequence": 1,
+      "stateVersion": 0,
+      "type": "RUN_STARTED",
+      "stepId": "step_validate_data",
+      "payload": {},
+      "timestamp": "2026-08-29T12:00:00Z"
+    },
+    {
+      "schemaVersion": "1",
+      "eventId": "evt_fixture_002",
+      "runId": "run_fixture_001",
+      "workflowId": "wf_fixture",
+      "workflowVersion": 1,
+      "sequence": 2,
+      "stateVersion": 3,
+      "type": "DECISION_REQUIRED",
+      "stepId": "step_validate_data",
+      "payload": {},
+      "timestamp": "2026-08-29T12:01:00Z"
+    }
+  ],
+  "pendingDecision": {
+    "decisionId": "dec_fixture_001",
+    "stepId": "step_validate_data",
+    "title": "Review required",
+    "prompt": "Choose a permitted next action.",
+    "context": {
+      "record_count": 3
+    },
+    "requestedAt": "2026-08-29T12:01:00Z"
+  },
+  "availableActions": [
+    {
+      "actionId": "act_review",
+      "label": "Review",
+      "description": "Inspect the values before continuing.",
+      "risk": "medium",
+      "requiresHuman": true,
+      "payloadSchema": {
+        "type": "object",
+        "additionalProperties": false
+      }
+    }
+  ]
+}
