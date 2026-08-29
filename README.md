@@ -12,6 +12,7 @@ log append-only, fixture/demo driver y contratos Pydantic compartidos. Consulta
 | `app/flow/` | Definiciones y versiones inmutables de workflows |
 | `app/runtime/` | Ejecución, transiciones y proyección de runs |
 | `app/synthesis/` | Composer determinista de `RunProjection` a `UISpec` |
+| `app/policy/` | Validación declarativa y coordinación de acciones humanas |
 | `app/ws/` | Hub WebSocket en memoria por run y envelopes tipados |
 | `app/demo/` | Golden path, mock provider y demo driver |
 | `app/models/` | Tablas SQLAlchemy de workflows, runs, eventos y decisiones |
@@ -27,12 +28,11 @@ flowchart LR
     HTTP[POST /runs o /demo/advance] --> Engine[RunEngine + event log]
     Engine --> Projection[RunProjection]
     Projection --> Composer[Composer determinista]
-    Composer --> UI[UISpec persistida]
-    UI --> WS[Hub WebSocket]
+    Composer --> WS[UISpec por WebSocket]
     WS --> Frontend[Renderer recursivo]
-    Frontend -->|ACTION_SUBMITTED| Actions[RuntimeActionHandler]
-    Actions -->|ACTION_ACCEPTED / ACTION_REJECTED| WS
-    Actions --> Engine
+    Frontend -->|ACTION_SUBMITTED| Policy[Policy + ActionCoordinator]
+    Policy -->|ACTION_ACCEPTED / ACTION_REJECTED| WS
+    Policy --> Engine
 ```
 
 ## Requisitos
@@ -164,10 +164,13 @@ cinco pasos hasta `completed`:
 .venv/bin/python scripts/smoke_phase2.py \
   --base-url http://127.0.0.1:8000 \
   --token "$DEMO_TOKEN"
+.venv/bin/python scripts/smoke_phase3.py \
+  --base-url http://127.0.0.1:8000 \
+  --token "$DEMO_TOKEN"
 ```
 
-Las pruebas cubren contratos, composer, pipeline, endpoints, decisiones por WS,
-rechazo stale, event log y adaptación del runtime a `RunProjection`.
+Las pruebas cubren contratos, composer, policy, pipeline, demo driver,
+decisiones por WS, rechazo stale, event log y adaptación a `RunProjection`.
 
 ## Apagado
 

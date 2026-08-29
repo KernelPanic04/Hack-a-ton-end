@@ -4,6 +4,8 @@ import unittest
 from unittest.mock import AsyncMock
 from uuid import UUID
 
+from app.policy.engine import PolicyViolation
+from app.policy.service import ActionCoordinator
 from app.schemas.contracts import (
     ActionDefinition,
     ActionSubmittedEnvelope,
@@ -12,7 +14,6 @@ from app.schemas.contracts import (
     RunProjection,
     RunStepProjection,
 )
-from app.ws.actions import RuntimeActionHandler
 
 
 NOW = datetime(2026, 8, 29, 18, 0, tzinfo=timezone.utc)
@@ -97,7 +98,7 @@ def event(event_type: str, sequence: int, state_version: int) -> RunEvent:
     )
 
 
-class RuntimeActionHandlerTests(unittest.IsolatedAsyncioTestCase):
+class ActionCoordinatorTests(unittest.IsolatedAsyncioTestCase):
     async def test_valid_action_returns_action_accepted_envelope(self) -> None:
         engine = SimpleNamespace(
             get_projection=AsyncMock(
@@ -106,9 +107,12 @@ class RuntimeActionHandlerTests(unittest.IsolatedAsyncioTestCase):
             resolve_decision=AsyncMock(),
             latest_event=AsyncMock(return_value=event("ACTION_ACCEPTED", 5, 4)),
         )
-        handler = RuntimeActionHandler(session=None, engine=engine)  # type: ignore[arg-type]
+        policy = SimpleNamespace(validate=AsyncMock(return_value=projection()))
+        handler = ActionCoordinator(  # type: ignore[arg-type]
+            session=None, engine=engine, policy=policy
+        )
 
-        result = await handler.process(RUN_UUID, submitted())
+        result = await handler.handle(submitted().payload, RUN_UUID)
 
         self.assertEqual(result.type, "ACTION_ACCEPTED")
         self.assertEqual(result.payload.idempotency_key, "idem_action_1")
@@ -117,28 +121,37 @@ class RuntimeActionHandlerTests(unittest.IsolatedAsyncioTestCase):
             "act_find_alternative",
             {},
             3,
+            idempotency_key="idem_action_1",
         )
 
     async def test_stale_action_is_logged_and_returned_as_rejected(self) -> None:
-        current = projection(state_version=3)
         engine = SimpleNamespace(
-            get_projection=AsyncMock(side_effect=[current, current]),
+            get_projection=AsyncMock(return_value=projection(state_version=3)),
             record_action_rejection=AsyncMock(
                 return_value=event("ACTION_REJECTED", 5, 3)
             ),
             resolve_decision=AsyncMock(),
         )
-        handler = RuntimeActionHandler(session=None, engine=engine)  # type: ignore[arg-type]
+        policy = SimpleNamespace(
+            validate=AsyncMock(
+                side_effect=PolicyViolation(
+                    "STALE_STATE_VERSION", "El estado cambió; actualiza la interfaz."
+                )
+            )
+        )
+        handler = ActionCoordinator(  # type: ignore[arg-type]
+            session=None, engine=engine, policy=policy
+        )
 
-        result = await handler.process(RUN_UUID, submitted(state_version=2))
+        result = await handler.handle(submitted(state_version=2).payload, RUN_UUID)
 
         self.assertEqual(result.type, "ACTION_REJECTED")
-        self.assertEqual(result.payload.code, "stale_state_version")
+        self.assertEqual(result.payload.code, "STALE_STATE_VERSION")
         self.assertEqual(result.payload.current_state_version, 3)
         engine.record_action_rejection.assert_awaited_once_with(
             RUN_UUID,
             "act_find_alternative",
-            "stale_state_version",
+            "STALE_STATE_VERSION",
         )
         engine.resolve_decision.assert_not_awaited()
 
