@@ -1,10 +1,17 @@
 import os
+import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import engine, Base
+from app.core.database import engine, Base, get_db
+from app.demo.driver import DemoDriver, DemoDriverError
+from app.runtime.run import RunEngine, RunEngineError
+from app.schemas.contracts import RunEvent, RunProjection
 
 # Importante: cargar los modelos antes de crear tablas.
 from app.models.workflow import WorkflowDefinitionModel, WorkflowVersionModel  # noqa: F401
@@ -52,7 +59,78 @@ app.add_middleware(
 )
 
 
+class DemoAdvanceRequest(BaseModel):
+    """Entrada HTTP local del demo driver.
+
+    ``runId`` usa el ID wire que devuelve ``POST /runs``. No se incorpora al
+    contrato compartido porque es una envoltura HTTP, no un mensaje runtime/WS.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    run_id: str
+
+
+def _run_uuid(run_id: str) -> uuid.UUID:
+    """Acepta el ID wire ``run_<uuid>`` y UUID crudo para facilitar curl."""
+    raw_id = run_id.removeprefix("run_")
+    try:
+        return uuid.UUID(raw_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="runId inválido") from exc
+
+
+def _runtime_error(exc: RunEngineError | DemoDriverError) -> HTTPException:
+    message = str(exc)
+    # Un run inexistente es el único error de lectura; transiciones inválidas
+    # deben quedar explícitas como conflictos, no ocultarse como 500.
+    code = status.HTTP_404_NOT_FOUND if "no existe" in message else status.HTTP_409_CONFLICT
+    return HTTPException(status_code=code, detail=message)
+
+
 @app.get("/health", tags=["Health"])
 async def health():
     """Usado por el HEALTHCHECK de Docker (ver docker/Dockerfile)."""
     return {"status": "ok"}
+
+
+@app.post("/runs", response_model=RunProjection, status_code=status.HTTP_201_CREATED, tags=["Runs"])
+async def create_run(session: AsyncSession = Depends(get_db)) -> RunProjection:
+    """Crea un run nuevo del golden path y devuelve su snapshot inicial."""
+    driver = DemoDriver(session)
+    run = await driver.start_new_run()
+    return await driver.run_engine.get_projection(run.id)
+
+
+@app.post("/demo/advance", response_model=RunProjection, tags=["Demo"])
+async def advance_demo(
+    request: DemoAdvanceRequest, session: AsyncSession = Depends(get_db)
+) -> RunProjection:
+    """Aplica el siguiente evento guionizado del golden path a un run activo."""
+    run_id = _run_uuid(request.run_id)
+    driver = DemoDriver(session)
+    try:
+        run = await driver.advance(run_id)
+        return await driver.run_engine.get_projection(run.id)
+    except (RunEngineError, DemoDriverError) as exc:
+        raise _runtime_error(exc) from exc
+
+
+@app.get("/runs/{run_id}/projection", response_model=RunProjection, tags=["Runs"])
+async def get_run_projection(
+    run_id: str, session: AsyncSession = Depends(get_db)
+) -> RunProjection:
+    """Snapshot para reconexión y polling; no depende del WebSocket."""
+    try:
+        return await RunEngine(session).get_projection(_run_uuid(run_id))
+    except RunEngineError as exc:
+        raise _runtime_error(exc) from exc
+
+
+@app.get("/runs/{run_id}/events", response_model=list[RunEvent], tags=["Runs"])
+async def get_run_events(run_id: str, session: AsyncSession = Depends(get_db)) -> list[RunEvent]:
+    """Export JSON completo, append-only, del log del run."""
+    try:
+        return await RunEngine(session).get_event_log(_run_uuid(run_id))
+    except RunEngineError as exc:
+        raise _runtime_error(exc) from exc

@@ -240,25 +240,9 @@ class RunEngine:
         wire_workflow_id = _wire_id("wf", run.workflow_id)
 
         event_rows = await self.export_events(run.id)
-        recent_events = [
-            RunEvent(
-                event_id=_wire_id("evt", row.id),
-                run_id=wire_run_id,
-                workflow_id=wire_workflow_id,
-                workflow_version=version_row.version,
-                sequence=sequence,
-                state_version=row.state_version,
-                type=row.type,
-                step_id=(
-                    _wire_id("step", row.payload["step_id"])
-                    if isinstance(row.payload, dict) and row.payload.get("step_id")
-                    else None
-                ),
-                payload=row.payload,
-                timestamp=row.created_at,
-            )
-            for sequence, row in enumerate(event_rows, start=1)
-        ]
+        recent_events = self._to_contract_events(
+            event_rows, wire_run_id, wire_workflow_id, version_row.version
+        )
 
         current_step = None
         if run.current_step_id is not None:
@@ -328,6 +312,24 @@ class RunEngine:
         )
         return list(result.scalars().all())
 
+    async def get_event_log(self, run_id: uuid.UUID) -> list[RunEvent]:
+        """Exporta el log completo con el contrato wire de ``RunEvent``.
+
+        A diferencia de ``RunProjection.recent_events``, esta lista no se
+        recorta a 50 entradas y por eso es la fuente de ``GET /runs/{id}/events``.
+        """
+        run = await self._get_run_or_raise(run_id)
+        version_row = await self.flow_engine.get_version_by_id(run.workflow_version_id)
+        if version_row is None:
+            raise RunEngineError(f"WorkflowVersion {run.workflow_version_id} no existe")
+        rows = await self.export_events(run.id)
+        return self._to_contract_events(
+            rows,
+            _wire_id("run", run.id),
+            _wire_id("wf", run.workflow_id),
+            version_row.version,
+        )
+
     async def _get_run_or_raise(self, run_id: uuid.UUID) -> RunModel:
         run = await self.session.get(RunModel, run_id)
         if run is None:
@@ -339,6 +341,33 @@ class RunEngine:
         if version_row is None:
             raise RunEngineError(f"WorkflowVersion {run.workflow_version_id} no existe")
         return self.flow_engine.to_flow_definition(version_row)
+
+    @staticmethod
+    def _to_contract_events(
+        rows: list[RunEventModel],
+        wire_run_id: str,
+        wire_workflow_id: str,
+        workflow_version: int,
+    ) -> list[RunEvent]:
+        return [
+            RunEvent(
+                event_id=_wire_id("evt", row.id),
+                run_id=wire_run_id,
+                workflow_id=wire_workflow_id,
+                workflow_version=workflow_version,
+                sequence=sequence,
+                state_version=row.state_version,
+                type=row.type,
+                step_id=(
+                    _wire_id("step", row.payload["step_id"])
+                    if isinstance(row.payload, dict) and row.payload.get("step_id")
+                    else None
+                ),
+                payload=row.payload,
+                timestamp=row.created_at,
+            )
+            for sequence, row in enumerate(rows, start=1)
+        ]
 
     async def _append_event(self, run: RunModel, event_type: RunEventType, payload: dict[str, Any]) -> None:
         self.session.add(

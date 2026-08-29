@@ -100,6 +100,31 @@ cambias `POSTGRES_PORT`, define una `DATABASE_URL` equivalente para Uvicorn.
 El runtime conserva UUIDs y step IDs internos; `RunEngine.get_projection()` los
 adapta al contrato wire sin cambiar la persistencia de la arquitectura nueva.
 
+## HTTP del runtime (Rol A)
+
+Estos endpoints no dependen del WebSocket y permiten conducir y recuperar la
+demo por HTTP. Los identificadores devueltos usan el formato wire (`run_<uuid>`).
+
+| Método | Ruta | Resultado |
+|---|---|---|
+| `POST` | `/runs` | Crea el run v1 del golden path y devuelve su `RunProjection` inicial. |
+| `POST` | `/demo/advance` | Recibe `{"runId":"run_<uuid>"}`, aplica el siguiente evento guionizado y devuelve la proyección. |
+| `GET` | `/runs/{runId}/projection` | Devuelve el snapshot actual para polling/reconexión. |
+| `GET` | `/runs/{runId}/events` | Devuelve el event log append-only completo como `RunEvent[]`. |
+
+Ejemplo de avance:
+
+```bash
+curl -X POST http://localhost:8000/runs
+curl -X POST http://localhost:8000/demo/advance \
+  -H 'content-type: application/json' \
+  -d '{"runId":"run_<uuid-devuelto>"}'
+```
+
+`/projection` devuelve la proyección del runtime. La `UISpec` se añadirá a ese
+snapshot al integrar el pipeline de síntesis del paso 2.6; todavía no existe
+un compositor en este repositorio.
+
 ## Pruebas
 
 ```bash
