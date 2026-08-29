@@ -5,6 +5,7 @@ from uuid import UUID
 
 from app.runtime.executor import GenericStepExecutor
 from app.runtime.status import StoredRunStatus
+from app.synthesis.generic_step import GenericStepLLMResult
 
 
 RUN_ID = UUID("550e8400-e29b-41d4-a716-446655440000")
@@ -64,6 +65,25 @@ class GenericStepExecutorTests(unittest.IsolatedAsyncioTestCase):
         pending = engine.advance.await_args.kwargs["pending_decision"]
         self.assertEqual(pending["available_actions"], ["acknowledge"])
         self.assertEqual(engine.advance.await_args.args[3], "attention")
+
+    async def test_uses_validated_llm_result_when_available(self) -> None:
+        executor, engine = self._executor()
+
+        class LLM:
+            async def analyze(self, **kwargs):
+                return GenericStepLLMResult(
+                    findings=["The resolved input is ready."],
+                    verdict="pass",
+                    summary="Input analysis completed.",
+                )
+
+        executor.llm_executor = LLM()
+        await executor.execute_current(RUN_ID)
+
+        data = engine.advance.await_args.args[2]
+        self.assertEqual(data["summary"], "Input analysis completed.")
+        self.assertEqual(data["findings"], ["The resolved input is ready."])
+        self.assertEqual(data["verdict"], "pass")
 
 
 if __name__ == "__main__":

@@ -12,6 +12,8 @@ from app.schemas.contracts import (
     DecisionAction,
     DecisionPanelNode,
     DecisionPanelProps,
+    CompareNode,
+    CompareProps,
     KeyValueItem,
     KeyValueNode,
     KeyValueProps,
@@ -130,6 +132,27 @@ def _context(projection: RunProjection) -> KeyValueNode | None:
     )
 
 
+def _comparison(projection: RunProjection) -> CompareNode | None:
+    """Render the latest validated generic-step comparison with the compare primitive."""
+
+    for value in reversed(list(projection.operation.values())):
+        if not isinstance(value, dict):
+            continue
+        data = value.get("data")
+        if not isinstance(data, dict) or "comparison" not in data:
+            continue
+        try:
+            comparison = CompareProps.model_validate(data["comparison"])
+        except (TypeError, ValueError):
+            continue
+        return CompareNode(
+            id="ui_generic_comparison",
+            type="compare",
+            props=comparison,
+        )
+    return None
+
+
 def _decision_actions(actions: list[ActionDefinition]) -> list[DecisionAction]:
     return [
         DecisionAction(
@@ -172,6 +195,7 @@ def compose(projection: RunProjection) -> UISpec:
     current = _current_step(projection)
     timeline = _timeline(projection)
     context = _context(projection)
+    comparison = _comparison(projection)
     attention = (
         projection.current_step is not None and projection.current_step.status == "attention"
     ) or _contains_attention(projection.operation)
@@ -193,6 +217,8 @@ def compose(projection: RunProjection) -> UISpec:
         ]
         if context is not None:
             page_children.append(context)
+        if comparison is not None:
+            page_children.append(comparison)
         reason = "A pending review decision foregrounds the permitted human actions."
     elif attention:
         page_children = [
@@ -209,7 +235,7 @@ def compose(projection: RunProjection) -> UISpec:
                 id="ui_execution",
                 type="section",
                 props=SectionProps(title="Current activity", emphasis="warning"),
-                children=[node for node in (current, timeline) if node is not None],
+                children=[node for node in (current, comparison, timeline) if node is not None],
             ),
         ]
         reason = "An anomaly-level result changes the layout to foreground the alert."
@@ -236,7 +262,7 @@ def compose(projection: RunProjection) -> UISpec:
                 id="ui_execution",
                 type="section",
                 props=SectionProps(title="Activity"),
-                children=[timeline],
+                children=[node for node in (timeline, comparison) if node is not None],
             ),
         ]
         reason = "A stable run uses a summary-first layout with activity context."
