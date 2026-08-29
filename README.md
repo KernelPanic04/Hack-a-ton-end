@@ -1,6 +1,8 @@
-# Hack-a-ton Backend Template
+# Hack-a-ton-end — NextWave 2026 Challenge 03 (Rol A: Runtime Engineer)
 
-Plantilla base para el proyecto del Hackathon construida en Python utilizando la arquitectura **Controller-Service-Repository** (Layered Architecture) para un desarrollo rápido, escalable y mantenible.
+Backend en Python/FastAPI. Implementa el runtime del reto: motor de workflow versionado (`flow/`), ejecución de runs (`runtime/`), demo driver y mock provider (`demo/`), y las tablas de persistencia del run. Ver `CLAUDE.md` para el roadmap completo y los gates de entrega.
+
+Arquitectura de capas **Controller-Service-Repository** para lo que aplique CRUD/persistencia simple.
 
 ---
 
@@ -127,10 +129,8 @@ http://localhost:8000/docs
 
 ### 3. Test the Backend
 
-You can access the following endpoint:
-
 ```text
-http://localhost:8000/users_test
+http://localhost:8000/health
 ```
 
 ---

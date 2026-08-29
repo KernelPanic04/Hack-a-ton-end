@@ -1,27 +1,14 @@
 import os
 from contextlib import asynccontextmanager
-import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.database import engine, Base, AsyncSessionLocal
-from app.controller.user_controller import router as user_router
-from app.controller.user_test_controller import router as user_test_router
-from app.controller.auth_controller import router as auth_router
-from sqlalchemy import text
-from sqlalchemy.future import select
 
-# Importante: cargar el modelo antes de crear tablas
-from app.models.user import UserModel
-from app.models.user_test import UserTestModel
-from app.core.security import password_hash
+from app.core.database import engine, Base
 
-FAKE_USERS = [
-    {"name": "Alice Backend", "email": "alice@hackathon.com"},
-    {"name": "Bob Frontend", "email": "bob@hackathon.com"},
-    {"name": "Charlie DevOps", "email": "charlie@hackathon.com"},
-    {"name": "Diana Designer", "email": "diana@hackathon.com"},
-    {"name": "Evan PM", "email": "evan@hackathon.com"},
-]
+# Importante: cargar los modelos antes de crear tablas.
+from app.models.workflow import WorkflowDefinitionModel, WorkflowVersionModel  # noqa: F401
+from app.models.run import RunModel, RunEventModel, HumanDecisionModel  # noqa: F401
 
 # Orígenes permitidos para llamadas desde el frontend (CORS).
 #
@@ -46,44 +33,15 @@ ALLOWED_ORIGINS = (
 )
 
 
-async def seed_database_if_empty():
-    """Inserta datos de prueba solo si la tabla está completamente vacía."""
-    async with AsyncSessionLocal() as session:
-        # Verificar si existe al menos un registro
-        result = await session.execute(select(UserTestModel).limit(1))
-        has_data = result.scalars().first()
-
-        if not has_data:
-            print("Base de datos vacía. Insertando datos de prueba iniciales...")
-            for user_data in FAKE_USERS:
-                session.add(UserTestModel(
-                    **user_data,
-                    password_hash=password_hash.hash("Hackathon123!"),
-                ))
-            await session.commit()
-            print("Datos de prueba insertados automáticamente.")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Compatibilidad con bases creadas antes de agregar autenticación.
-        await conn.execute(text(
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)"
-        ))
-        await conn.execute(text(
-            "ALTER TABLE test_users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)"
-        ))
-        await conn.execute(
-            text("UPDATE test_users SET password_hash = :password_hash WHERE password_hash IS NULL"),
-            {"password_hash": password_hash.hash("Hackathon123!")},
-        )
-    await seed_database_if_empty()
     yield
     await engine.dispose()
 
-app = FastAPI(title="Hackathon API Base", lifespan=lifespan)
+
+app = FastAPI(title="Hackathon Runtime API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -98,7 +56,3 @@ app.add_middleware(
 async def health():
     """Usado por el HEALTHCHECK de Docker (ver docker/Dockerfile)."""
     return {"status": "ok"}
-
-
-app.include_router(user_router)
-app.include_router(user_test_router)
