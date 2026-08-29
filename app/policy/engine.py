@@ -32,6 +32,11 @@ ACTION_POLICIES: dict[str, ActionPolicy] = {
         requires_human=True,
         payload_schema={"type": "object", "additionalProperties": False},
     ),
+    "act_acknowledge": ActionPolicy(
+        risk="low",
+        requires_human=True,
+        payload_schema={"type": "object", "additionalProperties": False},
+    ),
 }
 
 

@@ -13,6 +13,7 @@ class HttpRoutesTests(unittest.TestCase):
             for route in app.routes
         }
         self.assertIn(("/runs", frozenset({"POST"})), routes)
+        self.assertIn(("/workflows/{workflow_id}/versions", frozenset({"POST"})), routes)
         self.assertIn(("/demo/skeleton", frozenset({"POST"})), routes)
         self.assertIn(("/demo/advance", frozenset({"POST"})), routes)
         self.assertIn(("/runs/{run_id}/projection", frozenset({"GET"})), routes)
