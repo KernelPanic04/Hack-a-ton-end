@@ -8,6 +8,7 @@ from typing import Any
 from app.flow.models import StepDefinition
 from app.runtime.run import RunEngine, RunEngineError
 from app.runtime.status import StoredRunStatus
+from app.synthesis.generic_step import GenericStepLLMExecutor
 
 
 class GenericStepExecutor:
@@ -18,8 +19,14 @@ class GenericStepExecutor:
     renders with its generic ``keyValue`` primitive.
     """
 
-    def __init__(self, session: Any, engine: RunEngine | None = None) -> None:
+    def __init__(
+        self,
+        session: Any,
+        engine: RunEngine | None = None,
+        llm_executor: GenericStepLLMExecutor | None = None,
+    ) -> None:
         self.engine = engine or RunEngine(session)
+        self.llm_executor = llm_executor or GenericStepLLMExecutor()
 
     async def execute_current(self, run_id: uuid.UUID):
         run = await self.engine.get_run(run_id)
@@ -37,6 +44,13 @@ class GenericStepExecutor:
             raise RunEngineError(f"Step {run.current_step_id} no existe en el workflow")
 
         data, has_missing_inputs = self._result_data(step, run.state)
+        llm_result = await self.llm_executor.analyze(
+            objective=step.objective,
+            resolved_inputs=data["resolved_inputs"],
+            missing_inputs=data["missing_inputs"],
+        )
+        if llm_result is not None:
+            data.update(llm_result.model_dump(mode="json", by_alias=True))
         needs_review = step.requires_human_review
         pending_decision = None
         if needs_review:
@@ -48,6 +62,8 @@ class GenericStepExecutor:
             }
 
         verdict = "attention" if needs_review or has_missing_inputs else "ok"
+        if llm_result is not None and llm_result.verdict in {"attention", "fail"}:
+            verdict = "attention"
         return await self.engine.advance(
             run_id,
             step.id,
