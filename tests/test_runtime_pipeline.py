@@ -1,108 +1,61 @@
 from datetime import datetime, timezone
-from types import SimpleNamespace
+from pathlib import Path
+from unittest.mock import AsyncMock
 import unittest
-from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 from app.runtime.pipeline import RuntimePipeline
-from app.schemas.contracts import RunEvent, RunProjection
-from app.synthesis import DeterministicComposer
+from app.schemas.contracts import RunEvent, RunProjection, UISpec
 
 
-NOW = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
 RUN_UUID = UUID("550e8400-e29b-41d4-a716-446655440000")
+FIXTURE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "app"
+    / "demo"
+    / "fixtures"
+    / "run_projection_pending_decision.json"
+)
 
 
-def projection(state_version: int = 2) -> RunProjection:
-    return RunProjection(
-        run_id=f"run_{RUN_UUID}",
-        workflow_id="wf_progressive_ui",
-        workflow_version=1,
-        state_version=state_version,
-        last_sequence=2,
-        status="running",
-        operation={"input": {"value": 4, "verdict": "ok"}},
-        recent_events=[],
-        available_actions=[],
-    )
-
-
-def ui_event() -> RunEvent:
-    return RunEvent(
-        event_id="evt_llm_ui_3",
-        run_id=f"run_{RUN_UUID}",
-        workflow_id="wf_progressive_ui",
-        workflow_version=1,
-        sequence=3,
-        state_version=2,
-        type="UI_UPDATED",
-        timestamp=NOW,
-    )
-
-
-class SessionContext:
-    async def __aenter__(self):
-        return object()
-
-    async def __aexit__(self, exc_type, exc, traceback):
-        return False
+def fixture_projection() -> RunProjection:
+    return RunProjection.model_validate_json(FIXTURE_PATH.read_text(encoding="utf-8"))
 
 
 class RuntimePipelineTests(unittest.IsolatedAsyncioTestCase):
-    async def test_publishes_llm_upgrade_when_baseline_is_still_current(self) -> None:
-        current = projection()
-        baseline = DeterministicComposer().compose(current)
-        upgraded = baseline.model_copy(
-            update={"generated_by": "llm", "reason": "Improved hierarchy."}
+    async def test_transition_projection_composition_and_websocket_delivery(self) -> None:
+        before_transition = fixture_projection()
+        after_transition = before_transition.model_copy(update={"last_sequence": 3})
+        ui_event = RunEvent(
+            event_id="evt_ui_updated",
+            run_id=before_transition.run_id,
+            workflow_id=before_transition.workflow_id,
+            workflow_version=before_transition.workflow_version,
+            sequence=3,
+            state_version=before_transition.state_version,
+            type="UI_UPDATED",
+            timestamp=datetime(2026, 8, 29, 12, 2, tzinfo=timezone.utc),
         )
-        llm = SimpleNamespace(
-            enabled=True,
-            compose_upgrade=AsyncMock(return_value=upgraded),
+        hub = type("Hub", (), {"publish": AsyncMock()})()
+        pipeline = RuntimePipeline(session=None, hub=hub)  # type: ignore[arg-type]
+        pipeline.engine.get_projection = AsyncMock(
+            side_effect=[before_transition, after_transition]
         )
-        hub = SimpleNamespace(publish=AsyncMock())
-        pipeline = RuntimePipeline(  # type: ignore[arg-type]
-            session=None, hub=hub, llm_composer=llm
-        )
-        engine = SimpleNamespace(
-            get_projection=AsyncMock(side_effect=[current, current]),
-            save_ui_spec=AsyncMock(return_value=ui_event()),
-        )
+        pipeline.engine.save_ui_spec = AsyncMock(return_value=ui_event)
 
-        with patch("app.runtime.pipeline.AsyncSessionLocal", return_value=SessionContext()), patch(
-            "app.runtime.pipeline.RunEngine", return_value=engine
-        ):
-            await pipeline._publish_llm_upgrade(RUN_UUID, current, baseline)
+        envelope = await pipeline.publish_current(RUN_UUID)
 
-        engine.save_ui_spec.assert_awaited_once_with(RUN_UUID, upgraded)
-        published = hub.publish.await_args.args[0]
-        self.assertEqual(published.payload.ui_spec.generated_by, "llm")
-        self.assertEqual(published.sequence, 3)
-
-    async def test_drops_upgrade_when_a_newer_state_already_exists(self) -> None:
-        original = projection()
-        newer = projection(state_version=3)
-        baseline = DeterministicComposer().compose(original)
-        upgraded = baseline.model_copy(update={"generated_by": "llm"})
-        llm = SimpleNamespace(
-            enabled=True,
-            compose_upgrade=AsyncMock(return_value=upgraded),
+        self.assertEqual(envelope.type, "UI_UPDATED")
+        self.assertEqual(envelope.run_id, before_transition.run_id)
+        self.assertEqual(envelope.sequence, 3)
+        self.assertEqual(envelope.payload.projection.last_sequence, 3)
+        self.assertEqual(envelope.payload.ui_spec.generated_by, "deterministic")
+        self.assertEqual(envelope.payload.ui_spec.state_version, before_transition.state_version)
+        UISpec.model_validate(envelope.payload.ui_spec.model_dump(mode="json"))
+        pipeline.engine.save_ui_spec.assert_awaited_once_with(
+            RUN_UUID, envelope.payload.ui_spec
         )
-        hub = SimpleNamespace(publish=AsyncMock())
-        pipeline = RuntimePipeline(  # type: ignore[arg-type]
-            session=None, hub=hub, llm_composer=llm
-        )
-        engine = SimpleNamespace(
-            get_projection=AsyncMock(return_value=newer),
-            save_ui_spec=AsyncMock(),
-        )
-
-        with patch("app.runtime.pipeline.AsyncSessionLocal", return_value=SessionContext()), patch(
-            "app.runtime.pipeline.RunEngine", return_value=engine
-        ):
-            await pipeline._publish_llm_upgrade(RUN_UUID, original, baseline)
-
-        engine.save_ui_spec.assert_not_awaited()
-        hub.publish.assert_not_awaited()
+        hub.publish.assert_awaited_once_with(envelope)
 
 
 if __name__ == "__main__":
