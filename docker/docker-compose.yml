@@ -8,6 +8,7 @@ services:
       POSTGRES_DB: hackathon_db
     ports:
       - "5433:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -19,15 +20,17 @@ services:
   backend:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: ../Dockerfile
     container_name: hack_a_ton_end_api
     environment:
       # Talks to postgres over the internal Docker network, by service name,
       # on its internal port (5432) -- not the 5433 published to the host.
       DATABASE_URL: postgresql+asyncpg://hack_user:hack_password@postgres:5432/hackathon_db
+      DEMO_TOKEN: ${DEMO_TOKEN:-replace-with-a-shared-demo-token}
       PORT: 8000
     ports:
       - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy

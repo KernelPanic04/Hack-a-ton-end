@@ -1,6 +1,6 @@
 # Hack-a-ton-end — NextWave 2026 Challenge 03 (Rol A: Runtime Engineer)
 
-Backend en Python/FastAPI. Implementa el runtime del reto: motor de workflow versionado (`flow/`), ejecución de runs (`runtime/`), demo driver y mock provider (`demo/`), y las tablas de persistencia del run. Ver `CLAUDE.md` para el roadmap completo y los gates de entrega.
+Backend en Python/FastAPI. Implementa el runtime del reto: motor de workflow versionado (`flow/`), ejecución de runs (`runtime/`), demo driver y mock provider (`demo/`), y las tablas de persistencia del run. Ver `AGENTS.md` para el roadmap completo y los gates de entrega.
 
 Arquitectura de capas **Controller-Service-Repository** para lo que aplique CRUD/persistencia simple.
 

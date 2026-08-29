@@ -1,6 +1,6 @@
 """Contratos compartidos del runtime (RunProjection, UISpec, ActionEvent, RunEvent, envelope WS).
 
-BORRADOR DE TRABAJO — el roadmap (CLAUDE.md, paso 0.1) asigna el congelamiento
+BORRADOR DE TRABAJO — el roadmap (AGENTS.md, paso 0.1) asigna el congelamiento
 formal de estos contratos a Rol D, con firma de los cuatro roles antes de H1.
 Este módulo existe para no bloquear a Rol A mientras eso ocurre (regla: "si una
 dependencia no llega, se mockea y se sigue"). No debe tratarse como definitivo.
