@@ -40,7 +40,7 @@ def projection() -> RunProjection:
     )
 
 
-def action(*, state_version: int = 3) -> ActionEvent:
+def action(*, state_version: int = 3, payload=None) -> ActionEvent:
     return ActionEvent(
         idempotency_key="idem_1",
         run_id=f"run_{RUN_UUID}",
@@ -48,7 +48,7 @@ def action(*, state_version: int = 3) -> ActionEvent:
         state_version=state_version,
         decision_id="dec_1",
         action_id="act_find_alternative",
-        payload={},
+        payload={} if payload is None else payload,
         timestamp=NOW,
     )
 
@@ -79,6 +79,14 @@ class PolicyEngineTests(unittest.IsolatedAsyncioTestCase):
             await ActionPolicyEngine(self.session, self.runtime).validate(action(), RUN_UUID)
 
         self.assertEqual(raised.exception.code, "IDEMPOTENCY_REPLAY")
+
+    async def test_rejects_payload_outside_the_declared_schema(self) -> None:
+        with self.assertRaises(PolicyViolation) as raised:
+            await ActionPolicyEngine(self.session, self.runtime).validate(
+                action(payload={"unexpected": True}), RUN_UUID
+            )
+
+        self.assertEqual(raised.exception.code, "PAYLOAD_INVALID")
 
 
 if __name__ == "__main__":

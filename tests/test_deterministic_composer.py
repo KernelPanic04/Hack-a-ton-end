@@ -106,6 +106,5 @@ class DeterministicComposerTests(unittest.TestCase):
         self.assertNotEqual(tree_types(anomaly), tree_types(decision))
         self.assertIn("anomaly", anomaly.reason.lower())
 
-
 if __name__ == "__main__":
     unittest.main()

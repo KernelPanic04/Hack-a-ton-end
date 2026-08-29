@@ -18,7 +18,8 @@ from app.schemas.contracts import (
     RunEvent,
     RunProjection,
 )
-from app.ws import RunWebSocketHub, RuntimeActionHandler
+from app.policy import ActionCoordinator
+from app.ws import RunWebSocketHub
 
 # Importante: cargar los modelos antes de crear tablas.
 from app.models.workflow import WorkflowDefinitionModel, WorkflowVersionModel  # noqa: F401
@@ -211,7 +212,7 @@ async def run_websocket(
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                 return
 
-            result = await RuntimeActionHandler(session).process(run_uuid, submitted)
+            result = await ActionCoordinator(session).handle(submitted.payload, run_uuid)
             if isinstance(result, ActionAcceptedEnvelope):
                 # ACTION_ACCEPTED is visible before the next deterministic UI
                 # snapshot, preserving the Phase 1 click feedback.

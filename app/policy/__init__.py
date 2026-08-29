@@ -1,7 +1,6 @@
-"""Declarative action policy for runtime decisions."""
+"""Declarative action policy and WebSocket action coordination."""
 
-# Keep this package lightweight: the optional coordinator imports the runtime
-# pipeline, while WS actions import the policy engine during app startup.
 from app.policy.engine import ActionPolicyEngine, PolicyViolation
+from app.policy.service import ActionCoordinator
 
-__all__ = ["ActionPolicyEngine", "PolicyViolation"]
+__all__ = ["ActionCoordinator", "ActionPolicyEngine", "PolicyViolation"]

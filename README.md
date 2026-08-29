@@ -164,6 +164,9 @@ cinco pasos hasta `completed`:
 .venv/bin/python scripts/smoke_phase2.py \
   --base-url http://127.0.0.1:8000 \
   --token "$DEMO_TOKEN"
+.venv/bin/python scripts/smoke_phase3.py \
+  --base-url http://127.0.0.1:8000 \
+  --token "$DEMO_TOKEN"
 ```
 
 Las pruebas cubren contratos, composer, policy, pipeline, demo driver,
