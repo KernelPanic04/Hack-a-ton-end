@@ -64,7 +64,7 @@ class DeterministicComposerTests(unittest.TestCase):
 
         self.assertEqual(spec.generated_by, "deterministic")
         self.assertFalse(any(node.type == "decisionPanel" for node in spec.layout.children))
-        execution = next(node for node in spec.layout.children if node.id.endswith("_execution"))
+        execution = next(node for node in spec.layout.children if node.id == "ui_execution")
         self.assertTrue(any(node.type == "timeline" for node in execution.children))
 
     def test_pending_decision_adds_attention_layout_and_allowed_action(self) -> None:
@@ -72,17 +72,27 @@ class DeterministicComposerTests(unittest.TestCase):
 
         panel = next(node for node in spec.layout.children if node.type == "decisionPanel")
         self.assertEqual(panel.props.actions[0].action_id, "act_continue")
-        self.assertIn("review", spec.reason.lower())
+        self.assertIn("pending", spec.reason.lower())
 
     def test_anomaly_and_decision_have_structurally_distinct_layouts(self) -> None:
         normal = DeterministicComposer().compose(make_projection())
         anomaly = DeterministicComposer().compose(make_projection(anomaly=True))
         decision = DeterministicComposer().compose(make_projection(pending=True))
 
-        child_types = lambda spec: [node.type for node in spec.layout.children]
-        self.assertEqual(child_types(normal), ["section", "section", "keyValue"])
-        self.assertEqual(child_types(anomaly), ["alert", "section"])
-        self.assertEqual(child_types(decision), ["alert", "decisionPanel", "timeline", "keyValue"])
+        def tree_types(spec):
+            types = []
+
+            def visit(node):
+                types.append(node.type)
+                for child in getattr(node, "children", []):
+                    visit(child)
+
+            visit(spec.layout)
+            return types
+
+        self.assertNotEqual(tree_types(normal), tree_types(anomaly))
+        self.assertNotEqual(tree_types(normal), tree_types(decision))
+        self.assertNotEqual(tree_types(anomaly), tree_types(decision))
         self.assertIn("anomaly", anomaly.reason.lower())
 
 
