@@ -7,12 +7,16 @@ from main import _run_uuid, app
 
 
 class HttpRoutesTests(unittest.TestCase):
-    def test_runtime_endpoints_are_registered_without_websocket_routes(self) -> None:
-        routes = {(route.path, frozenset(route.methods or [])) for route in app.routes}
+    def test_runtime_http_and_websocket_routes_are_registered(self) -> None:
+        routes = {
+            (route.path, frozenset(getattr(route, "methods", []) or []))
+            for route in app.routes
+        }
         self.assertIn(("/runs", frozenset({"POST"})), routes)
         self.assertIn(("/demo/advance", frozenset({"POST"})), routes)
         self.assertIn(("/runs/{run_id}/projection", frozenset({"GET"})), routes)
         self.assertIn(("/runs/{run_id}/events", frozenset({"GET"})), routes)
+        self.assertTrue(any(route.path == "/ws/runs/{run_id}" for route in app.routes))
 
     def test_run_id_parser_accepts_wire_and_raw_uuid(self) -> None:
         value = "550e8400-e29b-41d4-a716-446655440000"

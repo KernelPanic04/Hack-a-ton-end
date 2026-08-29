@@ -29,9 +29,11 @@ from app.schemas.contracts import (
     RunEventType,
     RunProjection,
     RunStepProjection,
+    UISpec,
 )
 
 _PENDING_DECISION_KEY = "_pending_decision"
+_UI_SPEC_KEY = "_ui_spec"
 
 
 def _wire_id(prefix: str, value: object) -> str:
@@ -294,12 +296,39 @@ class RunEngine:
             operation={
                 key: value
                 for key, value in run.state.items()
-                if key != _PENDING_DECISION_KEY
+                if key not in {_PENDING_DECISION_KEY, _UI_SPEC_KEY}
             },
             recent_events=recent_events[-50:],
             pending_decision=pending_request,
             available_actions=available_actions,
         )
+
+    async def save_ui_spec(self, run_id: uuid.UUID, ui_spec: UISpec) -> RunEvent:
+        """Persist the latest generated UI and record its delivery event.
+
+        The UI has the same state version as the projection that generated it;
+        persisting it inside the run's JSON state keeps this Phase 2 addition
+        migration-free while the shared snapshot contract remains frozen.
+        """
+        run = await self._get_run_or_raise(run_id)
+        expected_run_id = _wire_id("run", run.id)
+        if ui_spec.run_id != expected_run_id:
+            raise RunEngineError("uiSpec no pertenece al run indicado")
+
+        run.state = {
+            **run.state,
+            _UI_SPEC_KEY: ui_spec.model_dump(mode="json"),
+        }
+        await self._append_event(run, RunEventType.UI_UPDATED, {"generated_by": ui_spec.generated_by})
+        await self.session.commit()
+        await self.session.refresh(run)
+        return (await self.get_event_log(run.id))[-1]
+
+    async def get_last_ui_spec(self, run_id: uuid.UUID) -> UISpec | None:
+        """Return the persisted deterministic snapshot when one exists."""
+        run = await self._get_run_or_raise(run_id)
+        stored = run.state.get(_UI_SPEC_KEY)
+        return UISpec.model_validate(stored) if stored is not None else None
 
     async def get_run(self, run_id: uuid.UUID) -> RunModel:
         return await self._get_run_or_raise(run_id)

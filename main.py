@@ -2,7 +2,7 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
@@ -11,7 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import engine, Base, get_db
 from app.demo.driver import DemoDriver, DemoDriverError
 from app.runtime.run import RunEngine, RunEngineError
+from app.runtime.pipeline import RuntimePipeline
 from app.schemas.contracts import RunEvent, RunProjection
+from app.ws import RunWebSocketHub
 
 # Importante: cargar los modelos antes de crear tablas.
 from app.models.workflow import WorkflowDefinitionModel, WorkflowVersionModel  # noqa: F401
@@ -49,6 +51,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Hackathon Runtime API", lifespan=lifespan)
+app.state.ws_hub = RunWebSocketHub()
 
 app.add_middleware(
     CORSMiddleware,
@@ -99,6 +102,7 @@ async def create_run(session: AsyncSession = Depends(get_db)) -> RunProjection:
     """Crea un run nuevo del golden path y devuelve su snapshot inicial."""
     driver = DemoDriver(session)
     run = await driver.start_new_run()
+    await RuntimePipeline(session, app.state.ws_hub).publish_current(run.id)
     return await driver.run_engine.get_projection(run.id)
 
 
@@ -111,6 +115,7 @@ async def advance_demo(
     driver = DemoDriver(session)
     try:
         run = await driver.advance(run_id)
+        await RuntimePipeline(session, app.state.ws_hub).publish_current(run.id)
         return await driver.run_engine.get_projection(run.id)
     except (RunEngineError, DemoDriverError) as exc:
         raise _runtime_error(exc) from exc
@@ -134,3 +139,37 @@ async def get_run_events(run_id: str, session: AsyncSession = Depends(get_db)) -
         return await RunEngine(session).get_event_log(_run_uuid(run_id))
     except RunEngineError as exc:
         raise _runtime_error(exc) from exc
+
+
+@app.websocket("/ws/runs/{run_id}")
+async def run_websocket(
+    websocket: WebSocket, run_id: str, session: AsyncSession = Depends(get_db)
+) -> None:
+    """Subscribe to live typed envelopes for a single demo run.
+
+    On connection it replays the latest persisted ``UI_UPDATED`` envelope,
+    then pushes future transitions for that run.
+    """
+    if websocket.query_params.get("token") != os.getenv("DEMO_TOKEN", "placeholder"):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    try:
+        run_uuid = _run_uuid(run_id)
+        wire_run_id = f"run_{run_uuid}"
+    except HTTPException:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    hub: RunWebSocketHub = app.state.ws_hub
+    await hub.connect(wire_run_id, websocket)
+    try:
+        envelope = await RuntimePipeline(session, hub).latest_envelope(run_uuid)
+        if envelope is not None:
+            await websocket.send_json(envelope.model_dump(mode="json"))
+        while True:
+            # ActionEvent handling is added with policy in Phase 3. Keeping
+            # the socket open now makes this a pure subscription transport.
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        hub.disconnect(wire_run_id, websocket)
