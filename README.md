@@ -1,150 +1,182 @@
-# Hack-a-ton Backend Template
+# Hack-a-ton-end · NextWave 2026 Challenge 03
 
-Plantilla base para el proyecto del Hackathon construida en Python utilizando la arquitectura **Controller-Service-Repository** (Layered Architecture) para un desarrollo rápido, escalable y mantenible.
+Backend FastAPI del runtime de agentes de Kernel Panic. La rama `dev` contiene
+la arquitectura modular vigente: workflows versionados, reducer de runs, event
+log append-only, fixture/demo driver y contratos Pydantic compartidos. Consulta
+`AGENTS.md` para el roadmap y los gates de entrega.
 
----
+## Arquitectura actual
 
-## 🛠️ Stack Tecnológico
+| Ruta | Responsabilidad |
+|---|---|
+| `app/flow/` | Definiciones y versiones inmutables de workflows |
+| `app/runtime/` | Ejecución, transiciones y proyección de runs |
+| `app/synthesis/` | Composer determinista de `RunProjection` a `UISpec` |
+| `app/policy/` | Validación declarativa y coordinación de acciones humanas |
+| `app/ws/` | Hub WebSocket en memoria por run y envelopes tipados |
+| `app/demo/` | Golden path, mock provider y demo driver |
+| `app/models/` | Tablas SQLAlchemy de workflows, runs, eventos y decisiones |
+| `app/schemas/contracts.py` | Contrato v1 ejecutable para backend/frontend/WS |
+| `main.py` | Aplicación FastAPI, CORS, lifecycle y healthcheck |
 
-* **Framework Web:** FastAPI
-* **Validación & DTOs:** Pydantic v2 (`schemas/`)
-* **ORM:** SQLAlchemy 2.0 Async (`asyncpg`)
-* **Base de Datos:** PostgreSQL (vía Docker)
-* **Servidor ASGI:** Uvicorn
+La arquitectura Controller–Service–Repository del template anterior ya no es
+la estructura principal del runtime. Los módulos se organizan por capacidad del
+roadmap y comparten PostgreSQL dentro del mismo monolito modular.
 
----
-
-## 📐 Esquema General de la Arquitectura
-
-```text
-       HTTP Request (JSON)
-               │
-               ▼
-┌──────────────────────────────────────────────┐
-│           1. CONTROLLER / ROUTER             │
-│        (app/controller/user_controller.py)   │
-│  - Define verbos HTTP (@get, @post, etc.)    │
-│  - Valida contratos de entrada/salida (DTOs) │
-└──────────────────────┬───────────────────────┘
-                       │ Pasa DTOs validados / Inyecta Service
-                       ▼
-┌──────────────────────────────────────────────┐
-│              2. SERVICE LAYER                │
-│         (app/services/user_service.py)       │
-│  - Lógica de negocio y reglas de la app      │
-│  - Coordina múltiples repositorios           │
-└──────────────────────┬───────────────────────┘
-                       │ Llama métodos del Repository
-                       ▼
-┌──────────────────────────────────────────────┐
-│             3. REPOSITORY LAYER              │
-│       (app/repository/user_repository.py)    │
-│  - Consultas a DB (SQLAlchemy 2.0 async)     │
-│  - Hereda el CRUD Genérico (base.py)         │
-└──────────────────────┬───────────────────────┘
-                       │ Mapea entidades (models/)
-                       ▼
-┌──────────────────────────────────────────────┐
-│             DATABASE / PERSISTENCE           │
-│        (PostgreSQL en Docker Container)      │
-└──────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    HTTP[POST /runs o /demo/advance] --> Engine[RunEngine + event log]
+    Engine --> Projection[RunProjection]
+    Projection --> Composer[Composer determinista]
+    Composer --> WS[UISpec por WebSocket]
+    WS --> Frontend[Renderer recursivo]
+    Frontend -->|ACTION_SUBMITTED| Policy[Policy + ActionCoordinator]
+    Policy -->|ACTION_ACCEPTED / ACTION_REJECTED| WS
+    Policy --> Engine
 ```
 
----
+## Requisitos
 
-## 🚀 Guía Rápida de Extensión: ¿Dónde agrego código?
+- Docker con Docker Compose para el flujo recomendado.
+- Python 3.12+ solamente si se ejecutará FastAPI fuera de Docker.
 
-Para mantener tu proyecto escalable durante el hackathon, sigue este flujo según lo que necesites implementar:
-
-### 1. Si quieres agregar un nuevo ENDPOINT (Ruta HTTP)
-
-- **Dónde:** `app/controller/<modulo>_controller.py`
-- **Ejemplo:** Agregar un `@router.put("/{user_id}")` para actualizar un usuario.
-- **Flujo:** Defines el endpoint, recibes los datos con Pydantic y llamas al método correspondiente en el `Service`.
-
-### 2. Si quieres agregar LÓGICA DE NEGOCIO
-
-- **Dónde:** `app/services/<modulo>_service.py`
-- **Ejemplo:** Validar que el email no esté duplicado antes de guardar, o calcular una puntuación.
-- **Flujo:** Creas un nuevo método en el `Service`. Si la validación falla, lanzas una excepción de negocio que el `Controller` traducirá a un `HTTPException`.
-
-### 3. Si quieres agregar una nueva QUERY (Consulta a la DB)
-
-- **Dónde:** `app/repository/<modulo>_repository.py`
-- **Ejemplo:** `get_by_email()`, `get_active_users()`, o búsquedas con filtros complejos.
-- **Flujo:** Escribes el método usando la sintaxis de **SQLAlchemy 2.0** (`select(UserModel).where(...)`) y ejecutas la consulta de forma asíncrona mediante `self.session.execute()`.
-
----
-
-## ➕ Pasos para agregar un nuevo MÓDULO completo (ej. `Products`)
-
-Si tu equipo decide agregar una nueva entidad en el hackathon, solo debes seguir estos 5 pasos ordenados:
-
-1. **Modelo (`app/models/product.py`):** Creas la entidad SQLAlchemy heredando de `Base`.
-2. **Esquema (`app/schemas/product.py`):** Creas los DTOs de Pydantic (`ProductCreate`, `ProductResponse`).
-3. **Repositorio (`app/repository/product_repository.py`):** Creas la clase heredando de `BaseRepository[ProductModel]`.
-4. **Servicio (`app/services/product_service.py`):** Creas la clase `ProductService` e inyectas `ProductRepository`.
-5. **Controlador (`app/controller/product_controller.py`):** Creas los endpoints con `APIRouter` e incluyes el router en `main.py`.
-6. No olvides crear el router en main.py
-
----
-
-## 📦 Requirements
-
-Install the Python dependencies:
+## Variables de entorno
 
 ```bash
-pip install -r requirements.txt
+cp .env.example .env
 ```
 
----
+| Variable | Default | Uso |
+|---|---:|---|
+| `BACKEND_PORT` | `8000` | Puerto de FastAPI publicado en el host |
+| `POSTGRES_PORT` | `5433` | Puerto de PostgreSQL publicado en el host |
+| `PORT` | `8000` | Puerto interno de FastAPI en el contenedor |
+| `DEMO_TOKEN` | placeholder | Token compartido del handshake WebSocket de demo |
+| `ALLOWED_ORIGINS` | frontend `5173`/`5174`/`3000` | Lista CORS separada por comas |
 
-## 🏃 Run the Backend Locally
+`DEMO_TOKEN` debe coincidir con `VITE_DEMO_TOKEN` del frontend. Es un control
+exclusivo de la demo, no una credencial de producción. Nunca commitees `.env`.
 
-### 1. Start the Docker services
+## Inicio recomendado: backend completo con Docker
+
+Desde la raíz del repositorio:
 
 ```bash
-docker compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml up --build -d
+docker compose -f docker/docker-compose.yml ps
+curl --fail http://localhost:8000/health
 ```
 
-### 2. Start the FastAPI backend
+Servicios publicados:
+
+| Servicio | URL/puerto del host | Puerto interno |
+|---|---|---:|
+| FastAPI | `http://localhost:8000` | `8000` |
+| Swagger | `http://localhost:8000/docs` | `8000` |
+| Health | `http://localhost:8000/health` | `8000` |
+| PostgreSQL | `localhost:5433` | `5432` |
+
+Compose ya levanta FastAPI; no ejecutes además `uvicorn` en el puerto 8000.
+
+Si esos puertos están ocupados, cambia `.env` sin editar Compose:
+
+```env
+BACKEND_PORT=18000
+POSTGRES_PORT=15433
+```
+
+En ese caso, el healthcheck queda en `http://localhost:18000/health`. Si el
+frontend apunta directamente al backend, actualiza también `VITE_API_URL`.
+
+## Desarrollo local de FastAPI
+
+Levanta solamente PostgreSQL y ejecuta la API en el host:
 
 ```bash
-uvicorn main:app --reload
+docker compose -f docker/docker-compose.yml up -d postgres
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The backend will be available at:
+La configuración Python usa por defecto PostgreSQL en `localhost:5433`. Si
+cambias `POSTGRES_PORT`, define una `DATABASE_URL` equivalente para Uvicorn.
 
-```text
-http://localhost:8000
-```
+## Contratos v1
 
-Interactive API documentation (Swagger UI):
+`app/schemas/contracts.py` es la autoridad ejecutable. Incluye:
 
-```text
-http://localhost:8000/docs
-```
+- `RunEvent` append-only y `RunProjection`.
+- `UISpec` con `reason` obligatorio y las nueve primitivas autorizadas.
+- `ActionEvent` sin `eventId` creado por cliente.
+- Envelope WebSocket tipado y los doce mensajes de servidor P0.
+- IDs wire prefijados (`run_`, `wf_`, `step_`, `act_`, etc.).
 
-### 3. Test the Backend
+El runtime conserva UUIDs y step IDs internos; `RunEngine.get_projection()` los
+adapta al contrato wire sin cambiar la persistencia de la arquitectura nueva.
 
-You can access the following endpoint:
+## HTTP del runtime (Rol A)
 
-```text
-http://localhost:8000/users_test
-```
+Estos endpoints no dependen del WebSocket y permiten conducir y recuperar la
+demo por HTTP. Los identificadores devueltos usan el formato wire (`run_<uuid>`).
 
----
+| Método | Ruta | Resultado |
+|---|---|---|
+| `POST` | `/demo/skeleton` | Crea un run en decisión pendiente y publica la `UISpec` mínima para verificar G1. |
+| `POST` | `/runs` | Crea el run v1 del golden path y devuelve su `RunProjection` inicial. |
+| `POST` | `/demo/advance` | Recibe `{"runId":"run_<uuid>"}`, aplica el siguiente evento guionizado y devuelve la proyección. |
+| `GET` | `/runs/{runId}/projection` | Devuelve el snapshot actual para polling/reconexión. |
+| `GET` | `/runs/{runId}/events` | Devuelve el event log append-only completo como `RunEvent[]`. |
+| `WS` | `/ws/runs/{runId}?token=<DEMO_TOKEN>` | Reproduce la última `UI_UPDATED` y emite las transiciones posteriores. |
 
-## 🛑 Stop the Backend
-
-First, stop the FastAPI server:
-
-```text
-Ctrl + C
-```
-
-Then stop and remove the Docker services:
+Ejemplo de avance:
 
 ```bash
-docker compose -f docker/docker-compose.yml down -v
+curl -X POST http://localhost:8000/runs
+curl -X POST http://localhost:8000/demo/advance \
+  -H 'content-type: application/json' \
+  -d '{"runId":"run_<uuid-devuelto>"}'
 ```
+
+Tras crear o avanzar un run, el pipeline determinista compone una `UISpec`, la
+persiste dentro del estado del run y emite `UI_UPDATED`. Al conectarse, el WS
+reproduce esa última actualización; el contrato congelado de `/projection`
+sigue devolviendo exclusivamente `RunProjection`.
+
+El socket también recibe `ACTION_SUBMITTED`. El handler contrasta run,
+workflow/state version, decisión pendiente, acción y payload; registra la
+decisión y responde `ACTION_ACCEPTED`, o agrega un evento append-only y devuelve
+`ACTION_REJECTED` con una razón legible. Una acción aceptada publica de inmediato
+la nueva `UI_UPDATED`.
+
+## Pruebas
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m compileall -q app main.py
+docker compose -f docker/docker-compose.yml config --quiet
+```
+
+Con el stack levantado, el smoke reproducible verifica G1 y el golden path de
+cinco pasos hasta `completed`:
+
+```bash
+.venv/bin/python scripts/smoke_phase2.py \
+  --base-url http://127.0.0.1:8000 \
+  --token "$DEMO_TOKEN"
+.venv/bin/python scripts/smoke_phase3.py \
+  --base-url http://127.0.0.1:8000 \
+  --token "$DEMO_TOKEN"
+```
+
+Las pruebas cubren contratos, composer, policy, pipeline, demo driver,
+decisiones por WS, rechazo stale, event log y adaptación a `RunProjection`.
+
+## Apagado
+
+```bash
+docker compose -f docker/docker-compose.yml down
+```
+
+El volumen de PostgreSQL se conserva. Usa `down -v` solo cuando quieras borrar
+deliberadamente todos los datos locales del proyecto.

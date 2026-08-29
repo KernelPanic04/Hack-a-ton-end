@@ -1,16 +1,37 @@
-
-
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: hack_a_ton_end_db
     environment:
       POSTGRES_USER: hack_user
       POSTGRES_PASSWORD: hack_password
       POSTGRES_DB: hackathon_db
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hack_user -d hackathon_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      # Talks to postgres over the internal Docker network, by service name,
+      # on its internal port (5432) -- not the 5433 published to the host.
+      DATABASE_URL: postgresql+asyncpg://hack_user:hack_password@postgres:5432/hackathon_db
+      DEMO_TOKEN: ${DEMO_TOKEN:-replace-with-a-shared-demo-token}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000}
+      PORT: ${PORT:-8000}
+    ports:
+      - "${BACKEND_PORT:-8000}:${PORT:-8000}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:

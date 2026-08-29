@@ -1,47 +1,227 @@
+import os
+import uuid
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from app.core.database import engine, Base, AsyncSessionLocal
-from app.controller.user_controller import router as user_router
-from app.controller.user_test_controller import router as user_test_router
-from sqlalchemy.future import select
 
-# Importante: cargar el modelo antes de crear tablas
-from app.models.user import UserModel
-from app.models.user_test import UserTestModel
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic.alias_generators import to_camel
+from sqlalchemy.ext.asyncio import AsyncSession
 
-FAKE_USERS = [
-    {"name": "Alice Backend", "email": "alice@hackathon.com"},
-    {"name": "Bob Frontend", "email": "bob@hackathon.com"},
-    {"name": "Charlie DevOps", "email": "charlie@hackathon.com"},
-    {"name": "Diana Designer", "email": "diana@hackathon.com"},
-    {"name": "Evan PM", "email": "evan@hackathon.com"},
+from app.core.database import engine, Base, get_db
+from app.demo.driver import DemoDriver, DemoDriverError
+from app.runtime.run import RunEngine, RunEngineError
+from app.runtime.pipeline import RuntimePipeline
+from app.schemas.contracts import (
+    ActionAcceptedEnvelope,
+    ActionSubmittedEnvelope,
+    RunEvent,
+    RunProjection,
+)
+from app.policy import ActionCoordinator
+from app.ws import RunWebSocketHub
+
+# Importante: cargar los modelos antes de crear tablas.
+from app.models.workflow import WorkflowDefinitionModel, WorkflowVersionModel  # noqa: F401
+from app.models.run import RunModel, RunEventModel, HumanDecisionModel  # noqa: F401
+
+# Orígenes permitidos para llamadas desde el frontend (CORS).
+#
+# Se puede sobreescribir con la variable de entorno ALLOWED_ORIGINS: una
+# lista separada por comas, por ejemplo:
+#   ALLOWED_ORIGINS=https://miapp.com,https://www.miapp.com
+#
+# Si la variable no está definida, se usan estos valores por defecto, que
+# cubren el servidor de desarrollo de Vite y el build servido por Nginx/Docker.
+DEFAULT_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
 ]
 
-
-async def seed_database_if_empty():
-    """Inserta datos de prueba solo si la tabla está completamente vacía."""
-    async with AsyncSessionLocal() as session:
-        # Verificar si existe al menos un registro
-        result = await session.execute(select(UserTestModel).limit(1))
-        has_data = result.scalars().first()
-
-        if not has_data:
-            print("Base de datos vacía. Insertando datos de prueba iniciales...")
-            for user_data in FAKE_USERS:
-                session.add(UserTestModel(**user_data))
-            await session.commit()
-            print("Datos de prueba insertados automáticamente.")
+_allowed_origins_env = os.getenv("ALLOWED_ORIGINS")
+ALLOWED_ORIGINS = (
+    [origin.strip() for origin in _allowed_origins_env.split(",") if origin.strip()]
+    if _allowed_origins_env
+    else DEFAULT_ALLOWED_ORIGINS
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    await seed_database_if_empty()
     yield
     await engine.dispose()
 
-app = FastAPI(title="Hackathon API Base", lifespan=lifespan)
 
-app.include_router(user_router)
-app.include_router(user_test_router)
+app = FastAPI(title="Hackathon Runtime API", lifespan=lifespan)
+app.state.ws_hub = RunWebSocketHub()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class DemoAdvanceRequest(BaseModel):
+    """Entrada HTTP local del demo driver.
+
+    ``runId`` usa el ID wire que devuelve ``POST /runs``. No se incorpora al
+    contrato compartido porque es una envoltura HTTP, no un mensaje runtime/WS.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    run_id: str
+
+
+def _run_uuid(run_id: str) -> uuid.UUID:
+    """Acepta el ID wire ``run_<uuid>`` y UUID crudo para facilitar curl."""
+    raw_id = run_id.removeprefix("run_")
+    try:
+        return uuid.UUID(raw_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="runId inválido") from exc
+
+
+def _runtime_error(exc: RunEngineError | DemoDriverError) -> HTTPException:
+    message = str(exc)
+    # Un run inexistente es el único error de lectura; transiciones inválidas
+    # deben quedar explícitas como conflictos, no ocultarse como 500.
+    code = status.HTTP_404_NOT_FOUND if "no existe" in message else status.HTTP_409_CONFLICT
+    return HTTPException(status_code=code, detail=message)
+
+
+@app.get("/health", tags=["Health"])
+async def health():
+    """Usado por el HEALTHCHECK de Docker (ver docker/Dockerfile)."""
+    return {"status": "ok"}
+
+
+@app.post("/runs", response_model=RunProjection, status_code=status.HTTP_201_CREATED, tags=["Runs"])
+async def create_run(session: AsyncSession = Depends(get_db)) -> RunProjection:
+    """Crea un run nuevo del golden path y devuelve su snapshot inicial."""
+    driver = DemoDriver(session)
+    run = await driver.start_new_run()
+    await RuntimePipeline(session, app.state.ws_hub).publish_current(run.id)
+    return await driver.run_engine.get_projection(run.id)
+
+
+@app.post("/demo/advance", response_model=RunProjection, tags=["Demo"])
+async def advance_demo(
+    request: DemoAdvanceRequest, session: AsyncSession = Depends(get_db)
+) -> RunProjection:
+    """Aplica el siguiente evento guionizado del golden path a un run activo."""
+    run_id = _run_uuid(request.run_id)
+    driver = DemoDriver(session)
+    try:
+        run = await driver.advance(run_id)
+        await RuntimePipeline(session, app.state.ws_hub).publish_current(run.id)
+        return await driver.run_engine.get_projection(run.id)
+    except (RunEngineError, DemoDriverError) as exc:
+        raise _runtime_error(exc) from exc
+
+
+@app.post("/demo/skeleton", response_model=RunProjection, tags=["Demo"])
+async def create_demo_skeleton(session: AsyncSession = Depends(get_db)) -> RunProjection:
+    """Crea un run ya pausado para demostrar Gate G1 en menos de 60 s.
+
+    Reutiliza el golden path real: crea el run y consume sus tres primeros
+    eventos hasta ``DECISION_REQUIRED``. El composer determinista produce el
+    árbol ``page → alert/decisionPanel/timeline/keyValue`` y el WebSocket lo
+    reenvía al conectarse mediante ``latest_envelope``.
+    """
+    driver = DemoDriver(session)
+    try:
+        run = await driver.start_new_run()
+        for _ in range(3):
+            run = await driver.advance(run.id)
+        await RuntimePipeline(session, app.state.ws_hub).publish_current(run.id)
+        return await driver.run_engine.get_projection(run.id)
+    except (RunEngineError, DemoDriverError) as exc:
+        raise _runtime_error(exc) from exc
+
+
+@app.get("/runs/{run_id}/projection", response_model=RunProjection, tags=["Runs"])
+async def get_run_projection(
+    run_id: str, session: AsyncSession = Depends(get_db)
+) -> RunProjection:
+    """Snapshot para reconexión y polling; no depende del WebSocket."""
+    try:
+        return await RunEngine(session).get_projection(_run_uuid(run_id))
+    except RunEngineError as exc:
+        raise _runtime_error(exc) from exc
+
+
+@app.get("/runs/{run_id}/events", response_model=list[RunEvent], tags=["Runs"])
+async def get_run_events(run_id: str, session: AsyncSession = Depends(get_db)) -> list[RunEvent]:
+    """Export JSON completo, append-only, del log del run."""
+    try:
+        return await RunEngine(session).get_event_log(_run_uuid(run_id))
+    except RunEngineError as exc:
+        raise _runtime_error(exc) from exc
+
+
+@app.websocket("/ws/runs/{run_id}")
+async def run_websocket(
+    websocket: WebSocket, run_id: str, session: AsyncSession = Depends(get_db)
+) -> None:
+    """Subscribe to live typed envelopes for a single demo run.
+
+    On connection it replays the latest persisted ``UI_UPDATED`` envelope,
+    then pushes future transitions for that run.
+    """
+    if websocket.query_params.get("token") != os.getenv("DEMO_TOKEN", "placeholder"):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    try:
+        run_uuid = _run_uuid(run_id)
+        wire_run_id = f"run_{run_uuid}"
+        await RunEngine(session).get_projection(run_uuid)
+    except HTTPException:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    except RunEngineError:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    hub: RunWebSocketHub = app.state.ws_hub
+    await hub.connect(wire_run_id, websocket)
+    try:
+        pipeline = RuntimePipeline(session, hub)
+        envelope = await pipeline.latest_envelope(run_uuid)
+        if envelope is not None:
+            await websocket.send_json(envelope.model_dump(mode="json"))
+        while True:
+            message = await websocket.receive_text()
+            try:
+                submitted = ActionSubmittedEnvelope.model_validate_json(message)
+            except ValidationError:
+                await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
+                return
+
+            if submitted.run_id != wire_run_id:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+
+            result = await ActionCoordinator(session).handle(submitted.payload, run_uuid)
+            if isinstance(result, ActionAcceptedEnvelope):
+                # ACTION_ACCEPTED is visible before the next deterministic UI
+                # snapshot, preserving the Phase 1 click feedback.
+                await hub.publish(result)
+                await pipeline.publish_current(run_uuid)
+            else:
+                # A rejection belongs only to the tab that submitted it.
+                await websocket.send_json(result.model_dump(mode="json"))
+    except WebSocketDisconnect:
+        pass
+    finally:
+        hub.disconnect(wire_run_id, websocket)
