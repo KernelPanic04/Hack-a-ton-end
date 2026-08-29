@@ -17,6 +17,7 @@ from app.schemas.contracts import (
     ActionSubmittedEnvelope,
     RunEvent,
     RunProjection,
+    UIUpdatedEnvelope,
 )
 from app.policy import ActionCoordinator
 from app.ws import RunWebSocketHub
@@ -156,6 +157,29 @@ async def get_run_projection(
     """Snapshot para reconexión y polling; no depende del WebSocket."""
     try:
         return await RunEngine(session).get_projection(_run_uuid(run_id))
+    except RunEngineError as exc:
+        raise _runtime_error(exc) from exc
+
+
+@app.get(
+    "/runs/{run_id}/snapshot", response_model=UIUpdatedEnvelope, tags=["Runs"]
+)
+async def get_run_snapshot(
+    run_id: str, session: AsyncSession = Depends(get_db)
+) -> UIUpdatedEnvelope:
+    """Latest validated projection + UISpec for reconnect and polling."""
+    try:
+        run_uuid = _run_uuid(run_id)
+        await RunEngine(session).get_projection(run_uuid)
+        envelope = await RuntimePipeline(session, app.state.ws_hub).latest_envelope(
+            run_uuid
+        )
+        if envelope is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="El run todavía no tiene una UISpec persistida.",
+            )
+        return envelope
     except RunEngineError as exc:
         raise _runtime_error(exc) from exc
 

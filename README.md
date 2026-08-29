@@ -53,9 +53,24 @@ cp .env.example .env
 | `PORT` | `8000` | Puerto interno de FastAPI en el contenedor |
 | `DEMO_TOKEN` | placeholder | Token compartido del handshake WebSocket de demo |
 | `ALLOWED_ORIGINS` | frontend `5173`/`5174`/`3000` | Lista CORS separada por comas |
+| `OPENAI_API_KEY` | vacío | Activa el upgrade progresivo de `UISpec` |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | Modelo usado por Responses API |
+| `LLM_UPGRADE_ENABLED` | `true` | Kill switch; sin key siempre usa determinista |
 
 `DEMO_TOKEN` debe coincidir con `VITE_DEMO_TOKEN` del frontend. Es un control
 exclusivo de la demo, no una credencial de producción. Nunca commitees `.env`.
+
+## Fase 3 · decisión humana y síntesis progresiva
+
+Cada transición publica y persiste primero una `UISpec` determinista. Si
+`OPENAI_API_KEY` está disponible, `app/synthesis/llm.py` solicita después una
+mejora con structured outputs, timeout de 5 segundos y un retry. Pydantic
+revalida el árbol y el backend conserva bajo su autoridad IDs, versiones y
+`availableActions`; cualquier fallo mantiene intacta la UI determinista.
+
+`GET /runs/{id}/snapshot` devuelve el último envelope `UI_UPDATED` completo
+para reconexión y polling. El WebSocket sigue reproduciendo el mismo snapshot
+al conectarse y aplica el policy engine antes de aceptar una decisión.
 
 ## Inicio recomendado: backend completo con Docker
 
