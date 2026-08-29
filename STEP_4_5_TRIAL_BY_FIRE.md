@@ -45,7 +45,7 @@ el WebSocket desde el frontend.
 ```text
 POST /runs (v1) → workflowId
        ↓
-POST /workflows/{workflowId}/versions (v2 + paso inventado)
+POST /workflows/{workflowId}/versions (baseVersion + paso inventado)
        ↓
 POST /runs { workflowVersionId: v2 }
        ↓
@@ -86,28 +86,21 @@ nueva. El run base no se usa para la prueba final.
 
 ### 3. Crear v(n+1) con un paso inventado
 
-El endpoint recibe la lista completa de pasos de la versión nueva. Incluye los
-pasos que el equipo quiera conservar y agrega uno que no exista en el mock
-provider. Este ejemplo usa tipos, títulos y rutas de inputs genéricos:
+El endpoint recibe `baseVersion` y la lista de pasos que se anexarán. El backend
+copia la versión base sin modificarla y agrega un paso que no exista en el mock
+provider:
 
 ```powershell
 $versionBody = @{
+  baseVersion = $baseRun.workflowVersion
   steps = @(
     @{
-      id = "collect_state"
-      type = "generic.collect"
-      title = "Collect state"
-      objective = "Collect values needed by subsequent steps."
-      inputs = @()
-      requiresHumanReview = $false
-    },
-    @{
-      id = "review_invented"
-      type = "generic.review"
-      title = "Review resolved values"
-      objective = "Assess the resolved values and report any meaningful change."
-      inputs = @("collect_state.data")
-      requiresHumanReview = $false
+      id = "unseen_runtime_audit"
+      type = "generic.runtime"
+      title = "Unseen runtime audit"
+      objective = "Inspect a prior runtime value and require acknowledgement."
+      inputs = @("delivery_eta.data.final_eta")
+      requiresHumanReview = $true
     }
   )
 } | ConvertTo-Json -Depth 8
@@ -159,7 +152,7 @@ Invoke-RestMethod `
 ```
 
 Cuando `MockProvider` no encuentre un evento guionizado para
-`review_invented`, `DemoDriver` debe delegar en `GenericStepExecutor`. No se
+`unseen_runtime_audit`, `DemoDriver` debe delegar en `GenericStepExecutor`. No se
 debe crear un evento mock para ese `type`: ese es precisamente el caso que se
 está demostrando.
 
@@ -183,14 +176,15 @@ ws://localhost:8000/ws/runs/{runId}?token={DEMO_TOKEN}
 
 ## Resultado esperado
 
-El estado del paso inventado contiene siempre el resultado determinista:
+El estado del paso inventado contiene siempre el resultado determinista con un
+valor proveniente del flow base:
 
 ```json
 {
   "resolved_inputs": {
     "input_1": {
-      "source": "collect_state.data",
-      "value": {}
+      "source": "delivery_eta.data.final_eta",
+      "value": "2026-09-15"
     }
   },
   "missing_inputs": []
@@ -220,6 +214,7 @@ Antes de abrir el PR:
 cd C:\Users\Diego\Hack-a-ton-end
 .venv\Scripts\python.exe -m unittest tests.test_generic_executor tests.test_generic_step_llm -v
 .venv\Scripts\python.exe -m unittest discover -s tests -v
+.venv\Scripts\python.exe scripts\smoke_phase4.py --base-url http://127.0.0.1:8000 --token $env:DEMO_TOKEN
 ```
 
 Añadir una prueba de integración para 4.5 que haga lo siguiente:
@@ -235,19 +230,18 @@ Añadir una prueba de integración para 4.5 que haga lo siguiente:
 
 ## Definition of Done de 4.5
 
-- [ ] La API crea `v(n+1)` sin reiniciar FastAPI.
-- [ ] `POST /runs` acepta y usa `workflowVersionId`.
-- [ ] El paso inventado no tiene fixture del mock provider.
-- [ ] El executor resuelve sus rutas de input desde el estado del run.
-- [ ] El timeline y el event log muestran el paso en ejecución y completado.
-- [ ] La `UISpec` pasa Pydantic y el inspector la puede mostrar.
-- [ ] `comparison` produce `compare`; sin comparación no se agrega ese nodo.
-- [ ] La ruta sin key, timeout o error de proveedor conserva el fallback
+- [x] La API crea `v(n+1)` sin reiniciar FastAPI.
+- [x] `POST /runs` acepta y usa `workflowVersionId`.
+- [x] El paso inventado no tiene fixture del mock provider.
+- [x] El executor resuelve sus rutas de input desde el estado del run.
+- [x] El timeline y el event log muestran el paso en ejecución y completado.
+- [x] La `UISpec` pasa Pydantic y el inspector la puede mostrar.
+- [x] `comparison` produce `compare`; sin comparación no se agrega ese nodo.
+- [x] La ruta sin key, timeout o error de proveedor conserva el fallback
   determinista.
 
 ## Handoff esperado
 
-El PR hacia `dev` debe incluir: rama, commit, endpoints probados, resultado de
-la suite, una evidencia de `GET /runs/{runId}/events` y una captura o JSON del
-inspector que muestre el paso nuevo. El gate que avanza es H17; no se declara
-cerrado hasta ejecutar también el trial-by-fire de 4.6.
+El handoff hacia `dev` incluye la salida JSON de `scripts/smoke_phase4.py` como
+evidencia de 4.5–4.7: step ID único generado en cada ejecución, input resuelto,
+`generatedBy`, estado final del timeline y tipos del event log.

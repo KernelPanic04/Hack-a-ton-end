@@ -11,7 +11,7 @@ log append-only, fixture/demo driver y contratos Pydantic compartidos. Consulta
 |---|---|
 | `app/flow/` | Definiciones y versiones inmutables de workflows |
 | `app/runtime/` | Ejecución, transiciones y proyección de runs |
-| `app/synthesis/` | Composer determinista de `RunProjection` a `UISpec` |
+| `app/synthesis/` | Composer determinista/LLM y structured output de pasos genéricos |
 | `app/policy/` | Validación declarativa y coordinación de acciones humanas |
 | `app/ws/` | Hub WebSocket en memoria por run y envelopes tipados |
 | `app/demo/` | Golden path, mock provider y demo driver |
@@ -56,6 +56,7 @@ cp .env.example .env
 | `OPENAI_API_KEY` | vacío | Activa el upgrade progresivo de `UISpec` |
 | `OPENAI_MODEL` | `gpt-5.4-mini` | Modelo usado por Responses API |
 | `LLM_UPGRADE_ENABLED` | `true` | Kill switch; sin key siempre usa determinista |
+| `GENERIC_STEP_LLM_ENABLED` | `true` | Kill switch del análisis LLM para pasos creados en runtime |
 
 `DEMO_TOKEN` debe coincidir con `VITE_DEMO_TOKEN` del frontend. Es un control
 exclusivo de la demo, no una credencial de producción. Nunca commitees `.env`.
@@ -91,6 +92,28 @@ GET http://localhost:8000/runs/run_<uuid>/snapshot
 
 El envelope tendrá `payload.uiSpec.generatedBy: "llm"` cuando el upgrade se
 publique; si el proveedor falla, el snapshot determinista permanece disponible.
+
+## Fase 4 · trial-by-fire
+
+`POST /workflows/{workflowId}/versions` acepta `baseVersion` junto con los pasos
+nuevos. El backend copia esa versión inmutable y anexa las definiciones del
+request; así el paso inventado se ejecuta después del flow base y puede resolver
+rutas reales como `delivery_eta.data.final_eta`.
+
+Cuando el mock provider no reconoce el paso, `GenericStepExecutor` resuelve sus
+inputs desde el estado, produce el fallback determinista y usa el structured
+output LLM cuando está disponible. `requiresHumanReview` pausa el run con
+`act_acknowledge`; al aceptarlo, el paso registra `STEP_COMPLETED` antes de
+continuar o cerrar el run.
+
+El trial completo, incluido WebSocket, timeline, `UISpec` y export del event
+log, se reproduce con:
+
+```bash
+python scripts/smoke_phase4.py \
+  --base-url http://127.0.0.1:8000 \
+  --token "$DEMO_TOKEN"
+```
 
 ## Inicio recomendado: backend completo con Docker
 
@@ -159,6 +182,8 @@ demo por HTTP. Los identificadores devueltos usan el formato wire (`run_<uuid>`)
 |---|---|---|
 | `POST` | `/demo/skeleton` | Crea un run en decisión pendiente y publica la `UISpec` mínima para verificar G1. |
 | `POST` | `/runs` | Crea el run v1 del golden path y devuelve su `RunProjection` inicial. |
+| `POST` | `/runs` con `workflowVersionId` | Crea un run contra una versión inmutable específica. |
+| `POST` | `/workflows/{workflowId}/versions` | Crea v(n+1); con `baseVersion`, preserva el flow base y anexa los pasos nuevos. |
 | `POST` | `/demo/advance` | Recibe `{"runId":"run_<uuid>"}`, aplica el siguiente evento guionizado y devuelve la proyección. |
 | `GET` | `/runs/{runId}/projection` | Devuelve el snapshot actual para polling/reconexión. |
 | `GET` | `/runs/{runId}/events` | Devuelve el event log append-only completo como `RunEvent[]`. |
@@ -202,10 +227,14 @@ cinco pasos hasta `completed`:
 .venv/bin/python scripts/smoke_phase3.py \
   --base-url http://127.0.0.1:8000 \
   --token "$DEMO_TOKEN"
+.venv/bin/python scripts/smoke_phase4.py \
+  --base-url http://127.0.0.1:8000 \
+  --token "$DEMO_TOKEN"
 ```
 
 Las pruebas cubren contratos, composer, policy, pipeline, demo driver,
-decisiones por WS, rechazo stale, event log y adaptación a `RunProjection`.
+decisiones por WS, rechazo stale, pasos inventados, revisión humana, event log
+y adaptación a `RunProjection`.
 
 ## Apagado
 
