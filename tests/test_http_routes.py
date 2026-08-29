@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
-from main import _run_uuid, app
+from main import WorkflowVersionCreateRequest, _run_uuid, app
 
 
 class HttpRoutesTests(unittest.TestCase):
@@ -30,6 +30,26 @@ class HttpRoutesTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as raised:
             _run_uuid("run_not-a-uuid")
         self.assertEqual(raised.exception.status_code, 422)
+
+    def test_workflow_version_request_accepts_a_camel_case_base_version(self) -> None:
+        request = WorkflowVersionCreateRequest.model_validate(
+            {
+                "baseVersion": 1,
+                "steps": [
+                    {
+                        "id": "unseen_runtime_audit",
+                        "type": "generic.runtime",
+                        "title": "Unseen runtime audit",
+                        "objective": "Inspect a prior value.",
+                        "inputs": ["previous.data.value"],
+                        "requiresHumanReview": True,
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(request.base_version, 1)
+        self.assertTrue(request.steps[0].requires_human_review)
 
 
 if __name__ == "__main__":
