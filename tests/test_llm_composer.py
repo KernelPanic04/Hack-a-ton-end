@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import unittest
+from unittest.mock import Mock
 
 from app.schemas.contracts import RunProjection
 from app.synthesis import DeterministicComposer, LLMComposer
@@ -64,6 +65,20 @@ class LLMComposerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(composer.enabled)
         self.assertIsNone(await composer.compose_upgrade(current, baseline))
+
+    async def test_kill_switch_keeps_deterministic_baseline_with_api_key(self) -> None:
+        current = projection()
+        baseline = DeterministicComposer().compose(current)
+        request_response = Mock()
+        composer = LLMComposer(
+            api_key="configured-key",
+            enabled=False,
+            request_response=request_response,
+        )
+
+        self.assertFalse(composer.enabled)
+        self.assertIsNone(await composer.compose_upgrade(current, baseline))
+        request_response.assert_not_called()
 
 
 if __name__ == "__main__":

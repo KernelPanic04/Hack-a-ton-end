@@ -96,6 +96,7 @@ class WorkflowVersionCreateRequest(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 
     steps: list[StepDefinition] = Field(min_length=1)
+    base_version: int | None = Field(default=None, ge=1)
 
 
 class WorkflowVersionResponse(BaseModel):
@@ -183,7 +184,25 @@ async def create_workflow_version(
     workflow_uuid = _uuid_with_prefix(workflow_id, "wf", "workflowId")
     if await engine.get_workflow_by_id(workflow_uuid) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow no existe")
-    version = await engine.create_version(workflow_uuid, request.steps)
+
+    steps = list(request.steps)
+    if request.base_version is not None:
+        base_version = await engine.get_version(workflow_uuid, request.base_version)
+        if base_version is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Workflow v{request.base_version} no existe",
+            )
+        base_flow = engine.to_flow_definition(base_version)
+        steps = [*base_flow.steps, *steps]
+
+    try:
+        version = await engine.create_version(workflow_uuid, steps)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.errors(include_url=False),
+        ) from exc
     return WorkflowVersionResponse(
         workflow_id=f"wf_{workflow_uuid}",
         workflow_version_id=f"wfv_{version.id}",

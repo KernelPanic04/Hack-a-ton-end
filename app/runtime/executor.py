@@ -8,6 +8,7 @@ from typing import Any
 from app.flow.models import StepDefinition
 from app.runtime.run import RunEngine, RunEngineError
 from app.runtime.status import StoredRunStatus
+from app.schemas.contracts import CompareProps, CompareRow
 from app.synthesis.generic_step import GenericStepLLMExecutor
 
 
@@ -51,6 +52,10 @@ class GenericStepExecutor:
         )
         if llm_result is not None:
             data.update(llm_result.model_dump(mode="json", by_alias=True))
+        if data.get("comparison") is None:
+            comparison = self._deterministic_comparison(data["resolved_inputs"])
+            if comparison is not None:
+                data["comparison"] = comparison.model_dump(mode="json", by_alias=True)
         needs_review = step.requires_human_review
         pending_decision = None
         if needs_review:
@@ -102,3 +107,47 @@ class GenericStepExecutor:
                 return False, None
             current = current[segment]
         return True, current
+
+    @staticmethod
+    def _deterministic_comparison(
+        resolved_inputs: dict[str, Any],
+    ) -> CompareProps | None:
+        """Build a neutral comparison when a generic step has two numbers.
+
+        The executor never assumes a larger number is an improvement: without
+        domain semantics, the only trustworthy conclusion is that values are
+        equal or changed. A validated LLM comparison remains preferred.
+        """
+        numeric_inputs: list[tuple[str, str, int | float]] = []
+        for key, item in resolved_inputs.items():
+            if not isinstance(item, dict):
+                continue
+            value = item.get("value")
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            source = item.get("source")
+            if not isinstance(source, str):
+                continue
+            numeric_inputs.append((key, source, value))
+            if len(numeric_inputs) == 2:
+                break
+
+        if len(numeric_inputs) != 2:
+            return None
+
+        left_key, left_source, before = numeric_inputs[0]
+        right_key, right_source, after = numeric_inputs[1]
+        return CompareProps(
+            title="Resolved numeric inputs",
+            left_label=left_source,
+            right_label=right_source,
+            rows=[
+                CompareRow(
+                    key=f"{left_key}_to_{right_key}",
+                    label="Resolved value",
+                    before=before,
+                    after=after,
+                    outcome="same" if before == after else "changed",
+                )
+            ],
+        )
