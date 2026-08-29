@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest.mock import Mock
 
 from app.schemas.contracts import CompareProps, RunProjection
 from app.synthesis import DeterministicComposer
@@ -56,6 +57,22 @@ class GenericStepLLMExecutorTests(unittest.IsolatedAsyncioTestCase):
                 objective="Check supplied values.", resolved_inputs={}, missing_inputs=[]
             )
         )
+
+    async def test_kill_switch_skips_provider_with_api_key(self) -> None:
+        request_response = Mock()
+        executor = GenericStepLLMExecutor(
+            api_key="configured-key",
+            enabled=False,
+            request_response=request_response,
+        )
+
+        self.assertFalse(executor.enabled)
+        self.assertIsNone(
+            await executor.analyze(
+                objective="Check supplied values.", resolved_inputs={}, missing_inputs=[]
+            )
+        )
+        request_response.assert_not_called()
 
     def test_comparison_becomes_compare_node_not_key_value(self) -> None:
         result = GenericStepLLMResult(

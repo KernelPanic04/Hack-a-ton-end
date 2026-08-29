@@ -57,6 +57,7 @@ cp .env.example .env
 | `OPENAI_MODEL` | `gpt-5.4-mini` | Modelo usado por Responses API |
 | `LLM_UPGRADE_ENABLED` | `true` | Kill switch; sin key siempre usa determinista |
 | `GENERIC_STEP_LLM_ENABLED` | `true` | Kill switch del análisis LLM para pasos creados en runtime |
+| `SQL_ECHO` | `false` | Activa explícitamente el log detallado de SQLAlchemy |
 
 `DEMO_TOKEN` debe coincidir con `VITE_DEMO_TOKEN` del frontend. Es un control
 exclusivo de la demo, no una credencial de producción. Nunca commitees `.env`.
@@ -92,6 +93,33 @@ GET http://localhost:8000/runs/run_<uuid>/snapshot
 
 El envelope tendrá `payload.uiSpec.generatedBy: "llm"` cuando el upgrade se
 publique; si el proveedor falla, el snapshot determinista permanece disponible.
+
+## Fase 5 · fallbacks y freeze
+
+La API siempre persiste y publica primero una `UISpec` determinista a partir de
+`RunProjection`. Los upgrades externos son opcionales: con ambos kill switches
+en `false`, el golden path, las decisiones y los pasos genéricos siguen
+funcionando sin red ni clave de proveedor.
+
+```env
+LLM_UPGRADE_ENABLED=false
+GENERIC_STEP_LLM_ENABLED=false
+SQL_ECHO=false
+```
+
+El smoke HTTP verifica que un payload real produce un snapshot `UI_UPDATED`,
+que sus versiones coinciden y que el árbol solo usa los nueve tipos del
+registry. Acepta una URL directa del backend o el proxy `/api` del frontend:
+
+```bash
+.venv/bin/python scripts/smoke_phase5.py \
+  --base-url http://127.0.0.1:8000 \
+  --expected-generator deterministic \
+  --token "$DEMO_TOKEN"
+```
+
+Usa `--expected-generator llm` únicamente cuando `OPENAI_API_KEY` esté
+configurada y el upgrade progresivo deba formar parte de la prueba.
 
 ## Fase 4 · trial-by-fire
 
@@ -229,6 +257,10 @@ cinco pasos hasta `completed`:
   --token "$DEMO_TOKEN"
 .venv/bin/python scripts/smoke_phase4.py \
   --base-url http://127.0.0.1:8000 \
+  --token "$DEMO_TOKEN"
+.venv/bin/python scripts/smoke_phase5.py \
+  --base-url http://127.0.0.1:8000 \
+  --expected-generator deterministic \
   --token "$DEMO_TOKEN"
 ```
 

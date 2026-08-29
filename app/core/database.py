@@ -1,6 +1,7 @@
 import os
 from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 # Local (fuera de Docker): usa el valor por defecto de abajo, que apunta al
@@ -25,6 +26,13 @@ def _to_asyncpg_url(url: str) -> str:
     return url
 
 
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 DATABASE_URL = _to_asyncpg_url(
     os.getenv(
         "DATABASE_URL",
@@ -32,17 +40,24 @@ DATABASE_URL = _to_asyncpg_url(
     )
 )
 
-engine = create_async_engine(DATABASE_URL, echo=True, future=True)
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=_env_flag("SQL_ECHO"),
+    future=True,
+)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
-    expire_on_commit=False
+    expire_on_commit=False,
 )
+
 
 class Base(DeclarativeBase):
     """Clase base de la cual heredarán todos los modelos de DB"""
+
     pass
+
 
 # Dependency Injection for FastAPI
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
