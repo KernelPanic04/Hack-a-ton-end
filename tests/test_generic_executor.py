@@ -85,6 +85,22 @@ class GenericStepExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["findings"], ["The resolved input is ready."])
         self.assertEqual(data["verdict"], "pass")
 
+    async def test_builds_deterministic_comparison_for_two_numeric_inputs(self) -> None:
+        executor, engine = self._executor()
+        run = engine.get_run.return_value
+        run.state = {"baseline": {"value": 9}, "candidate": {"value": 6}}
+        version = engine.flow_engine.get_version_by_id.return_value
+        version.steps[0]["inputs"] = ["baseline.value", "candidate.value"]
+
+        await executor.execute_current(RUN_ID)
+
+        comparison = engine.advance.await_args.args[2]["comparison"]
+        self.assertEqual(comparison["leftLabel"], "baseline.value")
+        self.assertEqual(comparison["rightLabel"], "candidate.value")
+        self.assertEqual(comparison["rows"][0]["before"], 9)
+        self.assertEqual(comparison["rows"][0]["after"], 6)
+        self.assertEqual(comparison["rows"][0]["outcome"], "changed")
+
 
 if __name__ == "__main__":
     unittest.main()
