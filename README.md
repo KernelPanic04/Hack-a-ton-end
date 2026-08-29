@@ -129,6 +129,16 @@ persiste dentro del estado del run y emite `UI_UPDATED`. Al conectarse, el WS
 reproduce esa última actualización; el contrato congelado de `/projection`
 sigue devolviendo exclusivamente `RunProjection`.
 
+## Decisiones humanas por WebSocket
+
+Cuando la proyección contiene `pendingDecision`, el cliente envía un envelope
+`ACTION_SUBMITTED` cuyo `payload` es el `ActionEvent` congelado. El backend
+valida token del handshake, run, versión de workflow, decisión, `stateVersion`,
+acción permitida, payload e `idempotencyKey`; después emite `ACTION_ACCEPTED`
+seguido de `UI_UPDATED`. Una acción inválida recibe `ACTION_REJECTED` con un
+motivo legible y la versión actual. La validación no se expone por HTTP para
+evitar dos rutas de autoridad para la misma decisión.
+
 ## Pruebas
 
 ```bash
