@@ -46,7 +46,10 @@ class DemoDriver:
             raise DemoDriverError(f"Run {run_id} no tiene un paso actual")
 
         try:
-            event = self.provider.event_for_step(run.current_step_id)
+            decision = getattr(run, "state", {}).get("last_decision", {})
+            event = self.provider.event_for_step(
+                run.current_step_id, action_id=decision.get("action_id")
+            )
         except MockProviderError as exc:
             raise DemoDriverError(str(exc)) from exc
 

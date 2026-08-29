@@ -70,7 +70,7 @@ class DeterministicComposerTests(unittest.TestCase):
     def test_pending_decision_adds_attention_layout_and_allowed_action(self) -> None:
         spec = DeterministicComposer().compose(make_projection(pending=True))
 
-        panel = next(node for node in spec.layout.children if node.type == "decisionPanel")
+        panel = self._node_by_type(spec.layout, "decisionPanel")
         self.assertEqual(panel.props.actions[0].action_id, "act_continue")
         self.assertIn("pending", spec.reason.lower())
 

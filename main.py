@@ -184,7 +184,11 @@ async def run_websocket(
     try:
         run_uuid = _run_uuid(run_id)
         wire_run_id = f"run_{run_uuid}"
+        await RunEngine(session).get_projection(run_uuid)
     except HTTPException:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    except RunEngineError:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
