@@ -6,6 +6,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.policy.engine import ActionPolicyEngine, PolicyViolation
 from app.runtime.run import RunEngine
 from app.schemas.contracts import (
     ActionAcceptedEnvelope,
@@ -31,8 +32,14 @@ class RuntimeActionHandler:
         self,
         session: AsyncSession,
         engine: RunEngine | None = None,
+        policy: ActionPolicyEngine | None = None,
     ) -> None:
         self.engine = engine or RunEngine(session)
+        # Tests may inject an in-memory engine without a database session. The
+        # real WebSocket path always supplies the policy engine.
+        self.policy = policy or (
+            ActionPolicyEngine(session, self.engine) if session is not None else None
+        )
 
     async def process(
         self,
@@ -41,6 +48,17 @@ class RuntimeActionHandler:
     ) -> ServerEnvelope:
         action = envelope.payload
         projection = await self.engine.get_projection(run_id)
+
+        if self.policy is not None:
+            try:
+                await self.policy.validate(action, run_id)
+            except PolicyViolation as exc:
+                return await self._reject(
+                    run_id,
+                    envelope,
+                    exc.code.lower(),
+                    exc.message,
+                )
 
         if action.workflow_version != projection.workflow_version:
             return await self._reject(
@@ -84,11 +102,15 @@ class RuntimeActionHandler:
                 "El payload de Phase 1 debe ser un objeto JSON.",
             )
 
+        resolve_kwargs = (
+            {"idempotency_key": action.idempotency_key} if self.policy is not None else {}
+        )
         await self.engine.resolve_decision(
             run_id,
             action.action_id,
             action.payload,
             action.state_version,
+            **resolve_kwargs,
         )
         accepted_event = await self.engine.latest_event(run_id, RunEventType.ACTION_ACCEPTED)
         if accepted_event is None:
