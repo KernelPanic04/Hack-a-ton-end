@@ -163,6 +163,7 @@ class RunEngine:
         action_id: str,
         payload: dict[str, Any],
         state_version: int,
+        idempotency_key: str | None = None,
     ) -> RunModel:
         """Aplica una decisión humana sobre un run pausado (objetivo Rol A #3).
         Rechaza en vivo si el `stateVersion` quedó stale o la acción no está
@@ -197,7 +198,7 @@ class RunEngine:
             HumanDecisionModel(
                 run_id=run.id,
                 action_id=action_id,
-                payload=payload,
+                payload={**payload, **({"_idempotency_key": idempotency_key} if idempotency_key else {})},
                 status="accepted",
                 resolved_at=datetime.now(timezone.utc),
             )
@@ -221,6 +222,19 @@ class RunEngine:
         await self.session.commit()
         await self.session.refresh(run)
         return run
+
+    async def record_action_rejection(
+        self, run_id: uuid.UUID, action_id: str, reason: str
+    ) -> RunEvent:
+        """Append a policy rejection without mutating the runtime state."""
+        run = await self._get_run_or_raise(run_id)
+        await self._append_event(
+            run,
+            RunEventType.ACTION_REJECTED,
+            {"action_id": _wire_id("act", action_id), "reason": reason},
+        )
+        await self.session.commit()
+        return (await self.get_event_log(run.id))[-1]
 
     async def get_projection(self, run_id: uuid.UUID) -> RunProjection:
         run = await self._get_run_or_raise(run_id)

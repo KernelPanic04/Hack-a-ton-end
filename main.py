@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from pydantic.alias_generators import to_camel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +12,8 @@ from app.core.database import engine, Base, get_db
 from app.demo.driver import DemoDriver, DemoDriverError
 from app.runtime.run import RunEngine, RunEngineError
 from app.runtime.pipeline import RuntimePipeline
-from app.schemas.contracts import RunEvent, RunProjection
+from app.schemas.contracts import ActionSubmittedEnvelope, RunEvent, RunProjection
+from app.policy import ActionCoordinator
 from app.ws import RunWebSocketHub
 
 # Importante: cargar los modelos antes de crear tablas.
@@ -157,7 +158,11 @@ async def run_websocket(
     try:
         run_uuid = _run_uuid(run_id)
         wire_run_id = f"run_{run_uuid}"
+        await RunEngine(session).get_projection(run_uuid)
     except HTTPException:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    except RunEngineError:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
@@ -168,8 +173,18 @@ async def run_websocket(
         if envelope is not None:
             await websocket.send_json(envelope.model_dump(mode="json"))
         while True:
-            # ActionEvent handling is added with policy in Phase 3. Keeping
-            # the socket open now makes this a pure subscription transport.
-            await websocket.receive_text()
+            try:
+                submitted = ActionSubmittedEnvelope.model_validate(
+                    await websocket.receive_json()
+                )
+            except ValidationError:
+                # A malformed message is not an action and therefore cannot
+                # produce a contract-valid ACTION_REJECTED envelope.
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+            if submitted.run_id != wire_run_id:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+            await ActionCoordinator(session, hub).handle(submitted.payload, run_uuid)
     except WebSocketDisconnect:
         hub.disconnect(wire_run_id, websocket)

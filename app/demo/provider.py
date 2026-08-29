@@ -5,7 +5,9 @@ sin depender de ninguna integración real."""
 
 from __future__ import annotations
 
-from app.demo.fixture import SCRIPTED_EVENTS
+from copy import deepcopy
+
+from app.demo.fixture import DECISION_OUTCOMES, SCRIPTED_EVENTS
 
 
 class MockProviderError(Exception):
@@ -29,10 +31,27 @@ class MockProvider:
             raise MockProviderError(f"No hay evento guionizado en el índice {index}")
         return self._events[index]
 
-    def event_for_step(self, step_id: str) -> dict:
+    def event_for_step(self, step_id: str, action_id: str | None = None) -> dict:
+        """Return the next scripted event, applying the accepted action when
+        the execution reaches a decision-dependent step."""
+        normalized_action = (action_id or "").removeprefix("act_")
+        if step_id in {"route_resolution", "delivery_eta"}:
+            if not normalized_action:
+                raise MockProviderError(
+                    f"El paso '{step_id}' requiere una decisión humana aceptada"
+                )
+            outcome = DECISION_OUTCOMES.get(normalized_action)
+            if outcome is None:
+                raise MockProviderError(f"La acción '{action_id}' no tiene resultado guionizado")
+            result = outcome[step_id]
+            return {
+                "step_id": step_id,
+                "data": deepcopy(result["data"]),
+                "verdict": result["verdict"],
+            }
         for event in self._events:
             if event["step_id"] == step_id:
-                return event
+                return deepcopy(event)
         raise MockProviderError(f"No hay evento guionizado para el paso '{step_id}'")
 
     def index_for_step(self, step_id: str) -> int:
