@@ -266,3 +266,10 @@ def compose(projection: RunProjection) -> UISpec:
         ),
         allowed_actions=projection.available_actions,
     )
+
+
+class DeterministicComposer:
+    """Compatibility adapter for runtime integrations that use an object API."""
+
+    def compose(self, projection: RunProjection) -> UISpec:
+        return compose(projection)
