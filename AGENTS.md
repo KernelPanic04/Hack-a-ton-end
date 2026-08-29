@@ -225,7 +225,21 @@ G4 	H17 	¿Paso inventado por D se ejecuta y renderiza? 	Trial-by-fire al video
 G5 	H20 	¿Fallbacks probados y freeze declarado? 	Recortar guion de demo
 6. Protocolo de trabajo y handoff
 
-    Empieza cada tarea revisando este archivo, el README del repo afectado, main, trabajo abierto y DECISION_LOG.md.
+Política de ramas obligatoria (decisión D-011 del repositorio de documentación):
+
+    Backend y frontend usan dev como única rama base para trabajo ordinario.
+    Antes de modificar archivos: git fetch origin --prune, checkout de dev,
+    git pull --ff-only origin dev y comprobación de que no se pisa trabajo local.
+    Desde dev actualizado se crea una rama nueva y enfocada antes del primer cambio.
+    Nunca se implementa ni se crea un commit de producto directamente en dev o main.
+    Todo trabajo se integra mediante PR o merge de la rama nueva hacia dev, después
+    de los checks correspondientes y de otro fetch para detectar cambios remotos.
+    La promoción dev → main ocurre solo en gates o por instrucción explícita de D.
+    Documentación es la excepción: se modifica directamente en main actualizado
+    mediante fast-forward, salvo que D pida expresamente una rama.
+    Nunca se usa push forzado para reconciliar divergencias.
+
+    Empieza cada tarea revisando este archivo, el README del repo afectado, la rama base definida arriba, trabajo abierto y DECISION_LOG.md.
     Verifica el estado real del código antes de aceptar afirmaciones de planes antiguos.
     Mantén PRs pequeños y orientados a un solo resultado observable.
     Preserva trabajo ajeno y no mezcles cambios no relacionados.
