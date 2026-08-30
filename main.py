@@ -1,6 +1,7 @@
 import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -109,16 +110,19 @@ class WorkflowVersionCreateRequest(BaseModel):
 class StudioGenerateRequest(BaseModel):
     """Free-text request for a standalone, run-agnostic UI layout.
 
-    ``conversationId`` is optional: omit it to start a new conversation, or
-    send back the one a prior response returned to continue it. History and
-    the last generated layout are persisted server-side (see
+    ``conversationId`` is optional: omit it to start a new project, or send
+    back the one a prior response returned to continue it. History and the
+    last generated layout are persisted server-side (see
     ``app/studio/store.py``) — the client never resends them itself.
+    ``name`` only matters when starting a new project (no ``conversationId``);
+    it is ignored otherwise.
     """
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 
     prompt: str = Field(min_length=1, max_length=2000)
     conversation_id: str | None = None
+    name: str = Field(default="", max_length=120)
 
 
 class StudioGenerateResponse(BaseModel):
@@ -129,6 +133,28 @@ class StudioGenerateResponse(BaseModel):
     generated_by: str
     reason: str
     layout: StudioPageNode
+
+
+class StudioProjectSummary(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, serialize_by_alias=True)
+
+    project_id: str
+    name: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class StudioProjectMessage(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, serialize_by_alias=True)
+
+    role: str
+    content: str
+    layout: StudioPageNode | None
+    created_at: datetime
+
+
+class StudioProjectDetail(StudioProjectSummary):
+    messages: list[StudioProjectMessage]
 
 
 class WorkflowVersionResponse(BaseModel):
@@ -335,7 +361,7 @@ async def generate_studio_ui(
         if not await store.conversation_exists(conversation_id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversación no existe")
     else:
-        conversation_id = await store.create_conversation()
+        conversation_id = await store.create_conversation(request.name)
 
     history = await store.get_history(conversation_id)
     previous_layout = await store.get_last_layout(conversation_id)
@@ -360,6 +386,49 @@ async def generate_studio_ui(
         generated_by=spec.generated_by,
         reason=spec.reason,
         layout=spec.layout,
+    )
+
+
+@app.get("/studio/projects", response_model=list[StudioProjectSummary], tags=["Studio"])
+async def list_studio_projects(session: AsyncSession = Depends(get_db)) -> list[StudioProjectSummary]:
+    """List every Studio project (named conversation), most recently active first."""
+    store = StudioConversationStore(session)
+    conversations = await store.list_conversations()
+    return [
+        StudioProjectSummary(
+            project_id=f"conv_{conversation.id}",
+            name=conversation.name,
+            created_at=conversation.created_at,
+            updated_at=conversation.updated_at,
+        )
+        for conversation in conversations
+    ]
+
+
+@app.get("/studio/projects/{project_id}", response_model=StudioProjectDetail, tags=["Studio"])
+async def get_studio_project(project_id: str, session: AsyncSession = Depends(get_db)) -> StudioProjectDetail:
+    """A project's full turn history, oldest first, for reopening it in the UI."""
+    store = StudioConversationStore(session)
+    conversation_id = _uuid_with_prefix(project_id, "conv", "projectId")
+    conversation = await store.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proyecto no existe")
+
+    messages = await store.get_messages(conversation_id)
+    return StudioProjectDetail(
+        project_id=f"conv_{conversation.id}",
+        name=conversation.name,
+        created_at=conversation.created_at,
+        updated_at=conversation.updated_at,
+        messages=[
+            StudioProjectMessage(
+                role=message.role,
+                content=message.content,
+                layout=StudioPageNode.model_validate(message.layout) if message.layout is not None else None,
+                created_at=message.created_at,
+            )
+            for message in messages
+        ],
     )
 
 

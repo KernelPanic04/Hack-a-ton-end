@@ -9,14 +9,21 @@ from app.core.database import Base
 
 
 class StudioConversationModel(Base):
-    """A Studio prompt-to-UI conversation. Holds no state of its own beyond
-    its identity and timestamps; the turns live in ``StudioMessageModel``."""
+    """A Studio prompt-to-UI conversation, i.e. a "project": one named,
+    persistent thread. The turns live in ``StudioMessageModel``; this row
+    only holds identity, a display name, and timestamps for listing."""
 
     __tablename__ = "studio_conversations"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
 
 

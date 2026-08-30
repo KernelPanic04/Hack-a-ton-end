@@ -1,15 +1,17 @@
-"""Server-persisted memory for Studio conversations.
+"""Server-persisted memory for Studio conversations ("projects").
 
 Kept deliberately separate from the run engine: a conversation is not a run,
 has no policy/actions, and its only job is remembering recent turns so the
-LLM can edit instead of rebuild. Retention is capped per conversation so the
-table can't grow without bound (see ``DEFAULT_HISTORY_LIMIT``).
+LLM can edit instead of rebuild, plus letting the UI list and reopen past
+projects. Retention is capped per conversation so the table can't grow
+without bound (see ``DEFAULT_HISTORY_LIMIT``).
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -29,6 +31,15 @@ class StoredMessage:
     role: str
     content: str
     layout: dict[str, Any] | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class StoredConversation:
+    id: uuid.UUID
+    name: str
+    created_at: datetime
+    updated_at: datetime
 
 
 def _to_history(rows: list[StoredMessage]) -> list[AssistMessage]:
@@ -64,8 +75,8 @@ class StudioConversationStore:
         self.session = session
         self.history_limit = history_limit
 
-    async def create_conversation(self) -> uuid.UUID:
-        conversation = StudioConversationModel()
+    async def create_conversation(self, name: str = "") -> uuid.UUID:
+        conversation = StudioConversationModel(name=name)
         self.session.add(conversation)
         await self.session.flush()
         return conversation.id
@@ -76,6 +87,26 @@ class StudioConversationStore:
         )
         return result.scalar_one_or_none() is not None
 
+    async def get_conversation(self, conversation_id: uuid.UUID) -> StoredConversation | None:
+        result = await self.session.execute(
+            select(StudioConversationModel).where(StudioConversationModel.id == conversation_id)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return None
+        return StoredConversation(id=row.id, name=row.name, created_at=row.created_at, updated_at=row.updated_at)
+
+    async def list_conversations(self) -> list[StoredConversation]:
+        """Most recently active project first."""
+
+        result = await self.session.execute(
+            select(StudioConversationModel).order_by(StudioConversationModel.updated_at.desc())
+        )
+        return [
+            StoredConversation(id=row.id, name=row.name, created_at=row.created_at, updated_at=row.updated_at)
+            for row in result.scalars().all()
+        ]
+
     async def _rows(self, conversation_id: uuid.UUID) -> list[StoredMessage]:
         result = await self.session.execute(
             select(StudioMessageModel)
@@ -83,9 +114,16 @@ class StudioConversationStore:
             .order_by(StudioMessageModel.created_at.asc())
         )
         return [
-            StoredMessage(id=row.id, role=row.role, content=row.content, layout=row.layout)
+            StoredMessage(
+                id=row.id, role=row.role, content=row.content, layout=row.layout, created_at=row.created_at
+            )
             for row in result.scalars().all()
         ]
+
+    async def get_messages(self, conversation_id: uuid.UUID) -> list[StoredMessage]:
+        """Full turn history for the project detail view, oldest first."""
+
+        return await self._rows(conversation_id)
 
     async def get_history(self, conversation_id: uuid.UUID) -> list[AssistMessage]:
         return _to_history(await self._rows(conversation_id))
@@ -109,6 +147,11 @@ class StudioConversationStore:
                 layout=layout.model_dump(mode="json", by_alias=True) if layout is not None else None,
             )
         )
+        result = await self.session.execute(
+            select(StudioConversationModel).where(StudioConversationModel.id == conversation_id)
+        )
+        conversation = result.scalar_one()
+        conversation.updated_at = datetime.now(timezone.utc)
         await self.session.flush()
 
     async def prune(self, conversation_id: uuid.UUID) -> None:

@@ -1,8 +1,12 @@
+from datetime import datetime, timezone
 import unittest
 import uuid
 
 from app.studio.schema import StudioPageNode
 from app.studio.store import StoredMessage, _ids_to_prune, _latest_layout, _to_history
+
+
+NOW = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
 
 
 LAYOUT_A = {
@@ -20,7 +24,7 @@ LAYOUT_B = {
 
 
 def row(role: str, content: str, layout: dict | None = None) -> StoredMessage:
-    return StoredMessage(id=uuid.uuid4(), role=role, content=content, layout=layout)
+    return StoredMessage(id=uuid.uuid4(), role=role, content=content, layout=layout, created_at=NOW)
 
 
 class ToHistoryTests(unittest.TestCase):
