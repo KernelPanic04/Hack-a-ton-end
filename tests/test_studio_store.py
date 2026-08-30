@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 import unittest
 import uuid
+from unittest.mock import AsyncMock
 
 from app.studio.schema import StudioPageNode
-from app.studio.store import StoredMessage, _ids_to_prune, _latest_layout, _to_history
+from app.studio.store import StoredMessage, StudioConversationStore, _ids_to_prune, _latest_layout, _to_history
 
 
 NOW = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
@@ -86,6 +87,24 @@ class IdsToPruneTests(unittest.TestCase):
     def test_keep_zero_prunes_everything(self) -> None:
         rows = [row("user", "a"), row("assistant", "b")]
         self.assertEqual(_ids_to_prune(rows, keep=0), [rows[0].id, rows[1].id])
+
+
+
+class DeleteConversationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_delete_clears_feedback_then_messages_then_conversation(self) -> None:
+        session = AsyncMock()
+        store = StudioConversationStore(session)
+
+        await store.delete_conversation(uuid.uuid4())
+
+        self.assertEqual(session.execute.await_count, 3)
+        targets = [call.args[0].table.name for call in session.execute.await_args_list]
+        self.assertEqual(
+            targets,
+            ["studio_conversation_feedback", "studio_messages", "studio_conversations"],
+        )
+        # Deletion never commits itself — the route owns the transaction boundary.
+        session.commit.assert_not_called()
 
 
 if __name__ == "__main__":

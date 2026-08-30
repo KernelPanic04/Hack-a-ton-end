@@ -181,6 +181,29 @@ class StudioConversationStore:
             return
         await self.session.execute(delete(StudioMessageModel).where(StudioMessageModel.id.in_(stale_ids)))
 
+    async def delete_conversation(self, conversation_id: uuid.UUID) -> None:
+        """Permanently remove a project: its feedback, its turns, then the row.
+
+        The foreign keys carry no ON DELETE cascade, so the children are
+        cleared explicitly before the conversation itself.
+        """
+
+        await self.session.execute(
+            delete(StudioConversationFeedbackModel).where(
+                StudioConversationFeedbackModel.conversation_id == conversation_id
+            )
+        )
+        await self.session.execute(
+            delete(StudioMessageModel).where(
+                StudioMessageModel.conversation_id == conversation_id
+            )
+        )
+        await self.session.execute(
+            delete(StudioConversationModel).where(
+                StudioConversationModel.id == conversation_id
+            )
+        )
+
     async def record_feedback(
         self, conversation_id: uuid.UUID, score: int, comment: str | None = None
     ) -> None:

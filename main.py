@@ -481,6 +481,22 @@ async def submit_studio_feedback(
     await session.commit()
 
 
+@app.delete(
+    "/studio/projects/{project_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Studio"],
+)
+async def delete_studio_project(project_id: str, session: AsyncSession = Depends(get_db)) -> None:
+    """Permanently delete a Studio project and all of its turns and feedback."""
+    store = StudioConversationStore(session)
+    conversation_id = _uuid_with_prefix(project_id, "conv", "projectId")
+    if not await store.conversation_exists(conversation_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proyecto no existe")
+
+    await store.delete_conversation(conversation_id)
+    await session.commit()
+
+
 @app.get(
     "/runs/{run_id}/snapshot", response_model=UIUpdatedEnvelope, tags=["Runs"]
 )
