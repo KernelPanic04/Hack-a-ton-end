@@ -197,7 +197,9 @@ class StudioUIGeneratorTests(unittest.IsolatedAsyncioTestCase):
         sent_input = json.loads(captured["payload"]["input"])
         self.assertNotIn("feedbackHistory", sent_input)
 
-    async def test_low_average_feedback_score_escalates_reasoning_effort(self) -> None:
+    async def _effort_for_scores(self, scores: list[int]) -> str:
+        """Reasoning effort the orchestrator would request for these ratings."""
+
         captured: dict = {}
 
         def request_response(payload, api_key, timeout):
@@ -207,16 +209,35 @@ class StudioUIGeneratorTests(unittest.IsolatedAsyncioTestCase):
         generator = StudioUIGenerator(
             api_key="test-key", enabled=True, request_response=request_response
         )
-        low_feedback = [
-            StoredFeedback(id=uuid.uuid4(), score=1, comment=None, created_at=datetime.now(timezone.utc)),
-            StoredFeedback(id=uuid.uuid4(), score=2, comment=None, created_at=datetime.now(timezone.utc)),
+        feedback = [
+            StoredFeedback(
+                id=uuid.uuid4(), score=score, comment=None, created_at=datetime.now(timezone.utc)
+            )
+            for score in scores
         ]
+        await generator.generate("crea dos botones", feedback=feedback)
+        return captured["payload"]["reasoning"]["effort"]
 
-        await generator.generate("crea dos botones", feedback=low_feedback)
+    async def test_reasoning_effort_graduates_with_recent_average(self) -> None:
+        # avg < 2 -> high, < 3 -> medium, < 4 -> low, >= 4 -> none.
+        self.assertEqual(await self._effort_for_scores([1, 2]), "high")   # avg 1.5
+        self.assertEqual(await self._effort_for_scores([2, 3]), "medium")  # avg 2.5
+        self.assertEqual(await self._effort_for_scores([3, 4]), "low")     # avg 3.5
+        self.assertEqual(await self._effort_for_scores([4, 5]), "none")    # avg 4.5
 
-        self.assertEqual(captured["payload"]["reasoning"]["effort"], "low")
+    async def test_reasoning_effort_boundaries_are_inclusive_at_the_lower_bucket(self) -> None:
+        # An average exactly on a bound belongs to the calmer bucket above it.
+        self.assertEqual(await self._effort_for_scores([1, 3]), "medium")  # avg 2.0, not high
+        self.assertEqual(await self._effort_for_scores([2, 4]), "low")     # avg 3.0, not medium
+        self.assertEqual(await self._effort_for_scores([3, 5]), "none")    # avg 4.0, not low
+
+    async def test_worst_ratings_request_the_deepest_reasoning(self) -> None:
+        self.assertEqual(await self._effort_for_scores([1, 1, 1]), "high")
 
     async def test_high_average_feedback_score_keeps_reasoning_effort_at_none(self) -> None:
+        self.assertEqual(await self._effort_for_scores([4, 5]), "none")
+
+    async def test_low_scored_comments_are_quoted_back_to_the_model(self) -> None:
         captured: dict = {}
 
         def request_response(payload, api_key, timeout):
@@ -226,14 +247,23 @@ class StudioUIGeneratorTests(unittest.IsolatedAsyncioTestCase):
         generator = StudioUIGenerator(
             api_key="test-key", enabled=True, request_response=request_response
         )
-        high_feedback = [
-            StoredFeedback(id=uuid.uuid4(), score=4, comment=None, created_at=datetime.now(timezone.utc)),
-            StoredFeedback(id=uuid.uuid4(), score=5, comment=None, created_at=datetime.now(timezone.utc)),
+        feedback = [
+            StoredFeedback(
+                id=uuid.uuid4(), score=1, comment="El botón de cancelar sobra.",
+                created_at=datetime.now(timezone.utc),
+            ),
+            StoredFeedback(
+                id=uuid.uuid4(), score=5, comment="Perfecto.",
+                created_at=datetime.now(timezone.utc),
+            ),
         ]
 
-        await generator.generate("crea dos botones", feedback=high_feedback)
+        await generator.generate("crea dos botones", feedback=feedback)
 
-        self.assertEqual(captured["payload"]["reasoning"]["effort"], "none")
+        instructions = captured["payload"]["instructions"]
+        self.assertIn("El botón de cancelar sobra.", instructions)
+        # A high-scored comment is not quoted as a defect to fix.
+        self.assertNotIn('"Perfecto."', instructions)
 
     async def test_no_run_or_workflow_metadata_is_required(self) -> None:
         generator = StudioUIGenerator(
@@ -247,6 +277,55 @@ class StudioUIGeneratorTests(unittest.IsolatedAsyncioTestCase):
         dumped = spec.model_dump(mode="json", by_alias=True)
         for field in ("runId", "workflowId", "workflowVersion", "stateVersion", "allowedActions"):
             self.assertNotIn(field, dumped)
+
+    async def test_orchestration_metadata_describes_the_decision(self) -> None:
+        generator = StudioUIGenerator(
+            api_key="test-key",
+            enabled=True,
+            request_response=lambda *_args: response(VALID_LAYOUT),
+        )
+        previous_layout = StudioPageNode.model_validate(VALID_LAYOUT["layout"])
+        history = [AssistMessage(role="user", content="crea dos botones")]
+        feedback = [
+            StoredFeedback(id=uuid.uuid4(), score=1, comment=None, created_at=datetime.now(timezone.utc)),
+            StoredFeedback(id=uuid.uuid4(), score=2, comment=None, created_at=datetime.now(timezone.utc)),
+        ]
+
+        spec = await generator.generate(
+            "otra vez", history=history, previous_layout=previous_layout, feedback=feedback
+        )
+
+        assert spec.orchestration is not None
+        self.assertEqual(spec.orchestration.reasoning_effort, "high")
+        self.assertEqual(spec.orchestration.feedback_average, 1.5)
+        self.assertEqual(spec.orchestration.feedback_count, 2)
+        self.assertEqual(spec.orchestration.history_turns, 1)
+        self.assertTrue(spec.orchestration.used_previous_layout)
+        # And it reaches the wire under camelCase aliases.
+        dumped = spec.model_dump(mode="json", by_alias=True)
+        self.assertEqual(dumped["orchestration"]["reasoningEffort"], "high")
+        self.assertEqual(dumped["orchestration"]["usedPreviousLayout"], True)
+
+    async def test_fallback_spec_still_carries_orchestration(self) -> None:
+        request_response = Mock(return_value={"output": []})  # always invalid
+        generator = StudioUIGenerator(
+            api_key="test-key", enabled=True, retries=0, request_response=request_response
+        )
+
+        spec = await generator.generate("crea dos botones")
+
+        self.assertEqual(spec.generated_by, "fallback")
+        assert spec.orchestration is not None
+        self.assertEqual(spec.orchestration.reasoning_effort, "none")
+        self.assertEqual(spec.orchestration.feedback_count, 0)
+        self.assertEqual(spec.orchestration.history_turns, 0)
+        self.assertFalse(spec.orchestration.used_previous_layout)
+
+    async def test_disabled_generator_still_reports_orchestration(self) -> None:
+        generator = StudioUIGenerator(api_key="")
+        spec = await generator.generate("crea dos botones")
+        assert spec.orchestration is not None
+        self.assertEqual(spec.orchestration.reasoning_effort, "none")
 
 
 if __name__ == "__main__":

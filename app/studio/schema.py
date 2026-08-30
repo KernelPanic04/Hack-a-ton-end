@@ -110,11 +110,28 @@ class StudioLLMOutput(ContractModel):
     layout: StudioPageNode
 
 
+class StudioOrchestration(ContractModel):
+    """What the orchestrator decided for one generation.
+
+    Surfaced on the wire so the UI can show *how* the prompt, the conversation
+    history and the recent feedback shaped the model call — the reasoning
+    effort the escalation curve picked, the recent-rating average behind it,
+    and whether a previous layout was replayed for editing.
+    """
+
+    reasoning_effort: Literal["none", "low", "medium", "high"] = "none"
+    feedback_average: float | None = None
+    feedback_count: int = 0
+    history_turns: int = 0
+    used_previous_layout: bool = False
+
+
 class StudioUISpec(ContractModel):
     schema_version: Literal["1"] = SCHEMA_VERSION
     generated_by: Literal["llm", "fallback"]
     reason: str = Field(min_length=1, max_length=500)
     suggestion: str | None = Field(default=None, max_length=300)
+    orchestration: StudioOrchestration | None = None
     layout: StudioPageNode
 
     @model_validator(mode="after")

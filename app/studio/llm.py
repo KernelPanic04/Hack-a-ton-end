@@ -18,13 +18,35 @@ from typing import Any
 from app.schemas.contracts import AlertNode, AlertProps, AssistMessage, PageProps
 from app.synthesis.llm import DEFAULT_MODEL, ResponseRequest, _output_text, _request_response
 from app.synthesis.llm_upgrade import describe_failure
-from app.studio.schema import StudioLLMOutput, StudioPageNode, StudioUISpec
+from app.studio.schema import (
+    StudioLLMOutput,
+    StudioOrchestration,
+    StudioPageNode,
+    StudioUISpec,
+)
 from app.studio.store import StoredFeedback
 
 
-LOW_RATING_THRESHOLD = 3.0
-"""Average of the 1-5 ``StoredFeedback`` scores below which the model is
-asked to spend more reasoning effort on the next generation."""
+# Graduated reasoning effort by recent average score (1-5): the worse the
+# recent ratings, the more reasoning budget the next generation gets. Each
+# tuple is (exclusive upper bound on the recent average, effort); the list is
+# checked low-to-high and the first bound the average falls under wins. A
+# missing average (no feedback yet) or one at/above the top bound gets
+# DEFAULT_REASONING_EFFORT.
+REASONING_EFFORT_BY_SCORE: tuple[tuple[float, str], ...] = (
+    (2.0, "high"),
+    (3.0, "medium"),
+    (4.0, "low"),
+)
+DEFAULT_REASONING_EFFORT = "none"
+
+# The recent-average boundary below which the model is asked for any extra
+# reasoning effort at all (named constant kept for readability/tests).
+LOW_RATING_THRESHOLD = 4.0
+
+# Ratings at or below this score are quoted back to the model verbatim so it
+# fixes the specific complaint on the next generation, not just the trend.
+LOW_SCORE_COMMENT_THRESHOLD = 2
 
 
 logger = logging.getLogger(__name__)
@@ -64,10 +86,29 @@ def _average_score(feedback: list[StoredFeedback]) -> float | None:
     return sum(entry.score for entry in feedback) / len(feedback)
 
 
-def blank_studio_spec(reason: str) -> StudioUISpec:
+def _reasoning_effort(average_score: float | None) -> str:
+    """Map a recent-feedback average (1-5) to a provider reasoning effort.
+
+    Graduated rather than binary: a mildly disappointing project nudges the
+    model up one notch, a badly rated one asks for its deepest reasoning. No
+    feedback, or a healthy average, costs no extra reasoning at all.
+    """
+
+    if average_score is None:
+        return DEFAULT_REASONING_EFFORT
+    for upper_bound, effort in REASONING_EFFORT_BY_SCORE:
+        if average_score < upper_bound:
+            return effort
+    return DEFAULT_REASONING_EFFORT
+
+
+def blank_studio_spec(
+    reason: str, orchestration: StudioOrchestration | None = None
+) -> StudioUISpec:
     return StudioUISpec(
         generated_by="fallback",
         reason=reason,
+        orchestration=orchestration,
         layout=StudioPageNode(
             id="ui_page",
             type="page",
@@ -159,7 +200,21 @@ class StudioUIGenerator:
                 "Favor layout choices similar to what earned high scores and "
                 "avoid whatever low-scored comments called out."
             )
-        effort = "low" if average_score is not None and average_score < LOW_RATING_THRESHOLD else "none"
+            low_score_complaints = [
+                entry.comment.strip()
+                for entry in feedback
+                if entry.score <= LOW_SCORE_COMMENT_THRESHOLD
+                and entry.comment
+                and entry.comment.strip()
+            ]
+            if low_score_complaints:
+                quoted = "; ".join(f'"{c}"' for c in low_score_complaints)
+                instructions += (
+                    " The lowest-rated past generations specifically complained: "
+                    f"{quoted}. Treat each as a concrete defect to fix in this "
+                    "generation, not just a soft preference."
+                )
+        effort = _reasoning_effort(average_score)
         return {
             "model": self.model,
             "store": False,
@@ -178,10 +233,23 @@ class StudioUIGenerator:
         previous_layout: StudioPageNode | None = None,
         feedback: list[StoredFeedback] | None = None,
     ) -> StudioUISpec:
-        if not self.enabled:
-            return blank_studio_spec("La generación de UI por prompt está deshabilitada.")
+        history = history or []
+        feedback = feedback or []
+        average = _average_score(feedback)
+        orchestration = StudioOrchestration(
+            reasoning_effort=_reasoning_effort(average),
+            feedback_average=round(average, 2) if average is not None else None,
+            feedback_count=len(feedback),
+            history_turns=len(history),
+            used_previous_layout=previous_layout is not None,
+        )
 
-        payload = self._payload(prompt, history or [], previous_layout, feedback or [])
+        if not self.enabled:
+            return blank_studio_spec(
+                "La generación de UI por prompt está deshabilitada.", orchestration
+            )
+
+        payload = self._payload(prompt, history, previous_layout, feedback)
         last_error: Exception | None = None
         for attempt in range(self.retries + 1):
             try:
@@ -199,6 +267,7 @@ class StudioUIGenerator:
                     generated_by="llm",
                     reason=output.reason,
                     suggestion=output.suggestion,
+                    orchestration=orchestration,
                     layout=output.layout,
                 )
             except Exception as exc:  # provider, timeout and schema failures all fall back
@@ -211,9 +280,11 @@ class StudioUIGenerator:
                     )
                     return blank_studio_spec(
                         f"No se pudo generar la interfaz solicitada tras {self.retries + 1} "
-                        f"intentos ({describe_failure(last_error)})."
+                        f"intentos ({describe_failure(last_error)}).",
+                        orchestration,
                     )
         return blank_studio_spec(
             f"No se pudo generar la interfaz solicitada tras {self.retries + 1} "
-            f"intentos ({describe_failure(last_error)})."
+            f"intentos ({describe_failure(last_error)}).",
+            orchestration,
         )

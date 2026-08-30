@@ -25,7 +25,7 @@ from app.schemas.contracts import (
 )
 from app.policy import ActionCoordinator
 from app.studio import StudioUIGenerator
-from app.studio.schema import StudioPageNode
+from app.studio.schema import StudioOrchestration, StudioPageNode
 from app.studio.store import StudioConversationStore
 from app.synthesis import AriAssistant
 from app.ws import RunWebSocketHub
@@ -137,6 +137,7 @@ class StudioGenerateResponse(BaseModel):
     generated_by: str
     reason: str
     suggestion: str | None
+    orchestration: StudioOrchestration
     layout: StudioPageNode
 
 
@@ -408,6 +409,7 @@ async def generate_studio_ui(
         generated_by=spec.generated_by,
         reason=spec.reason,
         suggestion=spec.suggestion,
+        orchestration=spec.orchestration,
         layout=spec.layout,
     )
 
