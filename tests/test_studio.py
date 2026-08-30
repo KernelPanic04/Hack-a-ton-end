@@ -2,8 +2,9 @@ import json
 import unittest
 from unittest.mock import Mock
 
+from app.schemas.contracts import AssistMessage
 from app.studio.llm import StudioUIGenerator
-from app.studio.schema import StudioUISpec
+from app.studio.schema import StudioPageNode, StudioUISpec
 
 
 def response(payload: dict) -> dict:
@@ -84,6 +85,51 @@ class StudioUIGeneratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(spec.generated_by, "fallback")
         self.assertIn("3 intentos", spec.reason)
         self.assertIn("no output_text content", spec.reason)
+
+    async def test_history_and_previous_layout_reach_the_provider_payload(self) -> None:
+        captured: dict = {}
+
+        def request_response(payload, api_key, timeout):
+            captured["payload"] = payload
+            return response(VALID_LAYOUT)
+
+        generator = StudioUIGenerator(
+            api_key="test-key", enabled=True, request_response=request_response
+        )
+        previous_layout = StudioPageNode.model_validate(VALID_LAYOUT["layout"])
+        history = [
+            AssistMessage(role="user", content="crea dos botones"),
+            AssistMessage(role="assistant", content="Listo, dos botones lado a lado."),
+        ]
+
+        await generator.generate(
+            "ahora ponlos verticales",
+            history=history,
+            previous_layout=previous_layout,
+        )
+
+        sent_input = json.loads(captured["payload"]["input"])
+        self.assertEqual(sent_input["prompt"], "ahora ponlos verticales")
+        self.assertEqual(len(sent_input["history"]), 2)
+        self.assertEqual(sent_input["history"][0]["content"], "crea dos botones")
+        self.assertEqual(sent_input["previousLayout"]["id"], "ui_page")
+
+    async def test_no_history_or_previous_layout_is_optional(self) -> None:
+        captured: dict = {}
+
+        def request_response(payload, api_key, timeout):
+            captured["payload"] = payload
+            return response(VALID_LAYOUT)
+
+        generator = StudioUIGenerator(
+            api_key="test-key", enabled=True, request_response=request_response
+        )
+
+        await generator.generate("crea dos botones")
+
+        sent_input = json.loads(captured["payload"]["input"])
+        self.assertEqual(sent_input["history"], [])
+        self.assertNotIn("previousLayout", sent_input)
 
     async def test_no_run_or_workflow_metadata_is_required(self) -> None:
         generator = StudioUIGenerator(

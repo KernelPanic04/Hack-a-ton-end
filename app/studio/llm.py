@@ -15,7 +15,7 @@ import logging
 import os
 from typing import Any
 
-from app.schemas.contracts import AlertNode, AlertProps, PageProps
+from app.schemas.contracts import AlertNode, AlertProps, AssistMessage, PageProps
 from app.synthesis.llm import DEFAULT_MODEL, ResponseRequest, _output_text, _request_response
 from app.synthesis.llm_upgrade import describe_failure
 from app.studio.schema import StudioLLMOutput, StudioPageNode, StudioUISpec
@@ -103,7 +103,20 @@ class StudioUIGenerator:
         )
         self.enabled = bool(self.api_key) and configured_enabled
 
-    def _payload(self, prompt: str) -> dict[str, Any]:
+    def _payload(
+        self,
+        prompt: str,
+        history: list[AssistMessage],
+        previous_layout: StudioPageNode | None,
+    ) -> dict[str, Any]:
+        input_payload: dict[str, Any] = {
+            "prompt": prompt,
+            "history": [turn.model_dump(mode="json", by_alias=True) for turn in history],
+        }
+        if previous_layout is not None:
+            input_payload["previousLayout"] = previous_layout.model_dump(
+                mode="json", by_alias=True
+            )
         return {
             "model": self.model,
             "store": False,
@@ -114,18 +127,28 @@ class StudioUIGenerator:
                 "Use only node types and props permitted by the output schema; "
                 "never invent one. Interpret layout instructions (grouping, "
                 "side-by-side, stacked, spacing) using the section node's "
-                "direction/gap/align/justify props. Keep labels concise and "
-                "explain your interpretation of the request in reason."
+                "direction/gap/align/justify props. If previousLayout is present, "
+                "treat the newest prompt as an edit/refinement of it — reuse its "
+                "node ids and content where the request doesn't change them — "
+                "using history only for conversational context; otherwise build "
+                "fresh. Keep labels concise and explain your interpretation of "
+                "the request in reason."
             ),
-            "input": json.dumps({"prompt": prompt}, separators=(",", ":")),
+            "input": json.dumps(input_payload, separators=(",", ":")),
             "text": {"format": _strict_output_schema()},
         }
 
-    async def generate(self, prompt: str) -> StudioUISpec:
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        history: list[AssistMessage] | None = None,
+        previous_layout: StudioPageNode | None = None,
+    ) -> StudioUISpec:
         if not self.enabled:
             return blank_studio_spec("La generación de UI por prompt está deshabilitada.")
 
-        payload = self._payload(prompt)
+        payload = self._payload(prompt, history or [], previous_layout)
         last_error: Exception | None = None
         for attempt in range(self.retries + 1):
             try:

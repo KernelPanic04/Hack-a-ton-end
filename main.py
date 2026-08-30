@@ -16,6 +16,7 @@ from app.runtime.pipeline import RuntimePipeline
 from app.schemas.contracts import (
     ActionAcceptedEnvelope,
     ActionSubmittedEnvelope,
+    AssistMessage,
     AssistRequest,
     AssistResponse,
     RunEvent,
@@ -24,6 +25,7 @@ from app.schemas.contracts import (
 )
 from app.policy import ActionCoordinator
 from app.studio import StudioUIGenerator, StudioUISpec
+from app.studio.schema import StudioPageNode
 from app.synthesis import AriAssistant
 from app.ws import RunWebSocketHub
 
@@ -104,11 +106,18 @@ class WorkflowVersionCreateRequest(BaseModel):
 
 
 class StudioGenerateRequest(BaseModel):
-    """Free-text request for a standalone, run-agnostic UI layout."""
+    """Free-text request for a standalone, run-agnostic UI layout.
+
+    Stateless like ``AssistRequest``: the frontend resends ``history`` and the
+    last ``previousLayout`` on every call so the LLM can refine instead of
+    rebuilding from scratch. The backend keeps no conversation of its own.
+    """
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 
     prompt: str = Field(min_length=1, max_length=2000)
+    history: list[AssistMessage] = Field(default_factory=list, max_length=20)
+    previous_layout: StudioPageNode | None = None
 
 
 class WorkflowVersionResponse(BaseModel):
@@ -306,7 +315,11 @@ async def generate_studio_ui(request: StudioGenerateRequest) -> StudioUISpec:
     only produces this JSON for the frontend's dedicated Studio renderer to
     consume.
     """
-    return await StudioUIGenerator().generate(request.prompt)
+    return await StudioUIGenerator().generate(
+        request.prompt,
+        history=request.history,
+        previous_layout=request.previous_layout,
+    )
 
 
 @app.get(
