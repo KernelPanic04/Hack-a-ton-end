@@ -131,7 +131,9 @@ class ChartNode(ContractModel):
 class TableProps(ContractModel):
     title: str | None = Field(default=None, max_length=120)
     columns: list[str] = Field(min_length=1, max_length=8)
-    rows: list[list[DisplayValue]] = Field(min_length=1, max_length=50)
+    # High enough to hold a real-world reference list in one shot (e.g. the
+    # ~195 UN member states) instead of a silent alphabetical truncation.
+    rows: list[list[DisplayValue]] = Field(min_length=1, max_length=250)
 
     @model_validator(mode="after")
     def validate_row_widths(self) -> TableProps:

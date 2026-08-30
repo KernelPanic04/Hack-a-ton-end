@@ -232,7 +232,7 @@ class StudioUIGenerator:
         self.timeout_seconds = (
             timeout_seconds
             if timeout_seconds is not None
-            else float(os.getenv("STUDIO_GENERATION_TIMEOUT_SECONDS", "12"))
+            else float(os.getenv("STUDIO_GENERATION_TIMEOUT_SECONDS", "25"))
         )
         self.retries = retries
         self.request_response = request_response
@@ -281,7 +281,15 @@ class StudioUIGenerator:
             "single 0-100 meter, tags for a list of short labels/badges, and "
             "chart (bar, line or pie) for any numeric series or comparison "
             "the prompt describes — prefer chart over a wall of metric "
-            "nodes when the request is really asking to visualize data. "
+            "nodes when the request is really asking to visualize data. A "
+            "table holds up to 250 rows — when the prompt asks for a full "
+            "real-world list (e.g. \"every country\"), fill the table with "
+            "the complete list rather than a small illustrative sample; "
+            "only fall back to a shorter sample if the true count would "
+            "exceed 250. A chart stays capped at 20 points regardless — for "
+            "the same data, chart only a meaningful top-N subset (e.g. the "
+            "20 largest by value), it is not meant to plot everything the "
+            "table lists. "
             "page, section, button, text, progress, each tags item and each "
             "chart point accept an optional hex color (e.g. \"#3366ff\", "
             "backgroundColor on page/section, color elsewhere). Whenever the "
@@ -339,7 +347,9 @@ class StudioUIGenerator:
             "model": self.model,
             "store": False,
             "reasoning": {"effort": effort},
-            "max_output_tokens": 2400,
+            # High enough for a full-size table (e.g. every country) plus its
+            # chart and wrapper sections in one response; see TableProps.rows.
+            "max_output_tokens": 6000,
             "instructions": instructions,
             "input": json.dumps(input_payload, separators=(",", ":")),
             "text": {"format": _strict_output_schema()},
