@@ -403,6 +403,44 @@ class ActionEvent(ContractModel):
     timestamp: AwareDatetime
 
 
+class AssistHistoryItem(ContractModel):
+    """One prior turn supplied by the assistant panel.
+
+    This HTTP-only contract deliberately lives outside the frozen WebSocket
+    envelope: chat is advisory and never mutates runtime state by itself.
+    """
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=2_000)
+
+
+class AssistRequest(ContractModel):
+    message: str = Field(min_length=1, max_length=2_000)
+    history: list[AssistHistoryItem] = Field(default_factory=list, max_length=20)
+
+
+class RecommendedAction(ContractModel):
+    action_id: ActionId
+    rationale: str = Field(min_length=1, max_length=400)
+
+
+class ProposedStep(ContractModel):
+    """A proposal only; the editor still creates the immutable flow version."""
+
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_.-]*$")
+    type: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_.-]*$")
+    title: str = Field(min_length=1, max_length=120)
+    objective: str = Field(min_length=1, max_length=500)
+    inputs: list[str] = Field(default_factory=list, max_length=20)
+    requires_human_review: bool = False
+
+
+class AssistResponse(ContractModel):
+    reply: str = Field(min_length=1, max_length=2_000)
+    recommended_actions: list[RecommendedAction] = Field(default_factory=list, max_length=1)
+    proposed_step: ProposedStep | None = None
+
+
 ProjectionMessageType: TypeAlias = Literal[
     "RUN_STARTED",
     "STEP_STARTED",
