@@ -87,7 +87,7 @@ class LLMComposerTests(unittest.IsolatedAsyncioTestCase):
                 {"id": "a", "label": "A", "lat": 1, "lon": 2, "kind": "origin"},
                 {"id": "b", "label": "B", "lat": 3, "lon": 4, "kind": "destination"},
             ],
-            "segments": [{"from": "a", "to": "b", "status": "planned"}],
+            "segments": [{"fromId": "a", "toId": "b", "status": "planned"}],
         }
         baseline = DeterministicComposer().compose(current)
         layout = baseline.layout.model_dump(mode="json", by_alias=True)
