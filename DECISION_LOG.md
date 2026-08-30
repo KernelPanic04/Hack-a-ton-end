@@ -60,3 +60,16 @@ snapshot).
   WS) sigue pendiente de congelamiento formal por Rol D (paso 0.1 del roadmap). Se
   crea un borrador de trabajo en este PR para no bloquear a Rol A; debe tratarse como
   no definitivo hasta que D lo firme.
+
+## 2026-08-29 · Roadmap v2 — caso final "Muebles del Sur / Ari"
+
+- **Decisión:** se adopta el caso final (booking Vietnam → México, agente Ari) y se actualiza `NEXTWAVE_RETO_03_ROADMAP.md` a v2 con las fases restantes 4.A–6.
+- **Adenda de contratos v1.1 (implementada 2026-08-30, pasos A.1/A.2/A.4):** nodo #10 `map`
+  (`MapProps` con waypoints/segments/marker genéricos, validador de referencias) en
+  `app/schemas/contracts.py` + espejo TS + JSON Schemas regenerados; contratos
+  `AssistRequest`/`AssistResponse` (HTTP-only, `proposedStep` reutiliza `StepDefinition`);
+  `act_notify_client` (risk low) en `ACTION_POLICIES`. Test de conteo congelado
+  actualizado 9→10. Suites verdes: backend 59 pass, frontend 28 pass + tsc.
+  Pendiente de A.3 (regla de composición del mapa) para que el composer lo emita.
+- **Alternativas consideradas:** (a) extender el envelope WS con mensajes de chat — descartado, rompería el contrato congelado; (b) llamar a OpenAI desde el front — descartado, expondría la key en el bundle; (c) mapa con tiles externos — descartado, rompe el fallback sin red; se usa SVG inline.
+- **Kill criteria nuevos:** mapa → route card; chat libre → panel solo-recomendaciones; trial desde UI → editor mínimo → video de respaldo.

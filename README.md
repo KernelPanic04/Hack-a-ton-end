@@ -57,6 +57,7 @@ cp .env.example .env
 | `OPENAI_MODEL` | `gpt-5.4-mini` | Modelo usado por Responses API |
 | `LLM_UPGRADE_ENABLED` | `true` | Kill switch; sin key siempre usa determinista |
 | `GENERIC_STEP_LLM_ENABLED` | `true` | Kill switch del análisis LLM para pasos creados en runtime |
+| `ASSISTANT_ENABLED` | `true` | Kill switch del chat de Ari; usa la misma key, siempre en backend |
 | `SQL_ECHO` | `false` | Activa explícitamente el log detallado de SQLAlchemy |
 
 `DEMO_TOKEN` debe coincidir con `VITE_DEMO_TOKEN` del frontend. Es un control
@@ -104,6 +105,7 @@ funcionando sin red ni clave de proveedor.
 ```env
 LLM_UPGRADE_ENABLED=false
 GENERIC_STEP_LLM_ENABLED=false
+ASSISTANT_ENABLED=false
 SQL_ECHO=false
 ```
 
@@ -142,6 +144,16 @@ python scripts/smoke_phase4.py \
   --base-url http://127.0.0.1:8000 \
   --token "$DEMO_TOKEN"
 ```
+
+## Asistente Ari
+
+`POST /runs/{runId}/assist` recibe `{ "message": "...", "history": [] }` y
+devuelve una respuesta estructurada con `reply`, `recommendedActions` y, si se
+solicita, `proposedStep`. El backend aporta la proyección, los últimos eventos
+y las acciones permitidas; Ari no puede ejecutar acciones ni crear versiones.
+Los chips del frontend deben enviar cualquier recomendación por el WebSocket y
+la policy existente. Si falta la key, el proveedor falla o
+`ASSISTANT_ENABLED=false`, responde una explicación determinista sin acciones.
 
 ## Inicio recomendado: backend completo con Docker
 
