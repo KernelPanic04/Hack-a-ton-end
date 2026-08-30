@@ -48,7 +48,10 @@ class LLMComposerTests(unittest.IsolatedAsyncioTestCase):
             }
 
         composer = LLMComposer(
-            api_key="test-key", enabled=True, request_response=request_response
+            api_key="test-key",
+            enabled=True,
+            timeout_seconds=5.0,
+            request_response=request_response,
         )
         upgraded = await composer.compose_upgrade(current, baseline)
 
