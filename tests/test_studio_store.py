@@ -1,8 +1,8 @@
 import unittest
-import uuid
+from datetime import datetime, timedelta, timezone
 
 from app.studio.schema import StudioPageNode
-from app.studio.store import StoredMessage, _ids_to_prune, _latest_layout, _to_history
+from app.studio.store import StudioConversationStore
 
 
 LAYOUT_A = {
@@ -18,68 +18,94 @@ LAYOUT_B = {
     "children": [{"id": "ui_text_b", "type": "text", "props": {"content": "B"}}],
 }
 
-
-def row(role: str, content: str, layout: dict | None = None) -> StoredMessage:
-    return StoredMessage(id=uuid.uuid4(), role=role, content=content, layout=layout)
+NOW = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
 
 
-class ToHistoryTests(unittest.TestCase):
-    def test_preserves_oldest_first_order_and_role(self) -> None:
-        rows = [row("user", "crea dos botones"), row("assistant", "Listo.")]
+class StudioConversationStoreTests(unittest.TestCase):
+    def test_each_conversation_keeps_its_own_independent_history(self) -> None:
+        store = StudioConversationStore()
+        chat_a = store.create_conversation()
+        chat_b = store.create_conversation()
 
-        history = _to_history(rows)
+        store.append_message(chat_a, "user", "crea dos botones", now=NOW)
+        store.append_message(chat_b, "user", "crea una tabla", now=NOW)
 
-        self.assertEqual([m.role for m in history], ["user", "assistant"])
-        self.assertEqual(history[0].content, "crea dos botones")
+        self.assertEqual([m.content for m in store.get_history(chat_a, now=NOW)], ["crea dos botones"])
+        self.assertEqual([m.content for m in store.get_history(chat_b, now=NOW)], ["crea una tabla"])
 
+    def test_a_process_restart_clears_everything(self) -> None:
+        store = StudioConversationStore()
+        chat = store.create_conversation()
+        store.append_message(chat, "user", "crea dos botones", now=NOW)
 
-class LatestLayoutTests(unittest.TestCase):
-    def test_returns_none_when_no_assistant_turn_has_a_layout(self) -> None:
-        rows = [row("user", "crea dos botones")]
-        self.assertIsNone(_latest_layout(rows))
+        restarted_store = StudioConversationStore()  # simulates the app restarting
 
-    def test_returns_the_most_recent_layout(self) -> None:
-        rows = [
-            row("user", "crea dos botones"),
-            row("assistant", "Listo.", LAYOUT_A),
-            row("user", "ahora ponlos verticales"),
-            row("assistant", "Hecho.", LAYOUT_B),
-        ]
+        self.assertFalse(restarted_store.conversation_exists(chat))
+        self.assertEqual(restarted_store.get_history(chat, now=NOW), [])
 
-        latest = _latest_layout(rows)
+    def test_while_alive_history_survives_well_within_the_retention_window(self) -> None:
+        store = StudioConversationStore()
+        chat = store.create_conversation()
+        store.append_message(chat, "user", "crea dos botones", now=NOW)
 
-        self.assertIsInstance(latest, StudioPageNode)
-        self.assertEqual(latest.props.title, "B")
+        almost_two_months_later = NOW + timedelta(days=59)
+        history = store.get_history(chat, now=almost_two_months_later)
 
-    def test_skips_a_trailing_blank_fallback_turn(self) -> None:
-        rows = [
-            row("user", "crea dos botones"),
-            row("assistant", "Listo.", LAYOUT_A),
-            row("user", "algo que rompe al proveedor"),
-            row("assistant", "No se pudo generar la interfaz.", None),
-        ]
+        self.assertEqual([m.content for m in history], ["crea dos botones"])
 
-        latest = _latest_layout(rows)
+    def test_turns_older_than_two_months_age_out(self) -> None:
+        store = StudioConversationStore()
+        chat = store.create_conversation()
+        store.append_message(chat, "user", "mensaje viejo", now=NOW)
+
+        more_than_two_months_later = NOW + timedelta(days=61)
+        store.append_message(chat, "user", "mensaje nuevo", now=more_than_two_months_later)
+        history = store.get_history(chat, now=more_than_two_months_later)
+
+        self.assertEqual([m.content for m in history], ["mensaje nuevo"])
+
+    def test_get_last_layout_skips_a_trailing_blank_fallback(self) -> None:
+        store = StudioConversationStore()
+        chat = store.create_conversation()
+        store.append_message(
+            chat, "assistant", "Listo.", layout=StudioPageNode.model_validate(LAYOUT_A), now=NOW
+        )
+        store.append_message(chat, "assistant", "No se pudo generar.", layout=None, now=NOW)
+
+        latest = store.get_last_layout(chat, now=NOW)
 
         self.assertIsNotNone(latest)
         self.assertEqual(latest.props.title, "A")
 
+    def test_get_last_layout_returns_the_most_recent_one(self) -> None:
+        store = StudioConversationStore()
+        chat = store.create_conversation()
+        store.append_message(
+            chat, "assistant", "Listo.", layout=StudioPageNode.model_validate(LAYOUT_A), now=NOW
+        )
+        store.append_message(
+            chat, "assistant", "Hecho.", layout=StudioPageNode.model_validate(LAYOUT_B), now=NOW
+        )
 
-class IdsToPruneTests(unittest.TestCase):
-    def test_no_pruning_needed_under_the_cap(self) -> None:
-        rows = [row("user", "a"), row("assistant", "b")]
-        self.assertEqual(_ids_to_prune(rows, keep=20), [])
+        latest = store.get_last_layout(chat, now=NOW)
 
-    def test_prunes_the_oldest_rows_beyond_the_cap(self) -> None:
-        rows = [row("user", f"turn {i}") for i in range(5)]
+        self.assertEqual(latest.props.title, "B")
 
-        stale = _ids_to_prune(rows, keep=2)
+    def test_history_is_capped_independently_of_retention(self) -> None:
+        store = StudioConversationStore(max_history=3)
+        chat = store.create_conversation()
+        for i in range(5):
+            store.append_message(chat, "user", f"turno {i}", now=NOW)
 
-        self.assertEqual(stale, [rows[0].id, rows[1].id, rows[2].id])
+        history = store.get_history(chat, now=NOW)
 
-    def test_keep_zero_prunes_everything(self) -> None:
-        rows = [row("user", "a"), row("assistant", "b")]
-        self.assertEqual(_ids_to_prune(rows, keep=0), [rows[0].id, rows[1].id])
+        self.assertEqual([m.content for m in history], ["turno 2", "turno 3", "turno 4"])
+
+    def test_conversation_exists_is_false_for_an_unknown_id(self) -> None:
+        import uuid
+
+        store = StudioConversationStore()
+        self.assertFalse(store.conversation_exists(uuid.uuid4()))
 
 
 if __name__ == "__main__":

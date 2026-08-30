@@ -32,7 +32,6 @@ from app.ws import RunWebSocketHub
 # Importante: cargar los modelos antes de crear tablas.
 from app.models.workflow import WorkflowDefinitionModel, WorkflowVersionModel  # noqa: F401
 from app.models.run import RunModel, RunEventModel, HumanDecisionModel  # noqa: F401
-from app.models.studio import StudioConversationModel, StudioMessageModel  # noqa: F401
 
 # Orígenes permitidos para llamadas desde el frontend (CORS).
 #
@@ -69,6 +68,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Hackathon Runtime API", lifespan=lifespan)
 app.state.ws_hub = RunWebSocketHub()
+# In-memory, like ws_hub: cleared on every restart, kept while the process
+# is alive (see app/studio/store.py for the retention window).
+app.state.studio_store = StudioConversationStore()
 
 app.add_middleware(
     CORSMiddleware,
@@ -319,40 +321,37 @@ async def assist_run(
 
 
 @app.post("/studio/generate", response_model=StudioGenerateResponse, tags=["Studio"])
-async def generate_studio_ui(
-    request: StudioGenerateRequest, session: AsyncSession = Depends(get_db)
-) -> StudioGenerateResponse:
+async def generate_studio_ui(request: StudioGenerateRequest) -> StudioGenerateResponse:
     """Generate a standalone UI layout from a free-text prompt.
 
     No run, workflow, or policy-authorized action is involved. History and the
-    last generated layout are persisted per ``conversationId`` (capped at the
-    most recent turns, see ``StudioConversationStore``) so a follow-up prompt
-    can edit what was already built instead of starting over.
+    last generated layout live per ``conversationId`` in the in-memory
+    ``StudioConversationStore`` (see ``app/studio/store.py``) — cleared on
+    restart, kept for up to two months while the process stays up — so a
+    follow-up prompt can edit what was already built instead of starting over.
     """
-    store = StudioConversationStore(session)
+    store: StudioConversationStore = app.state.studio_store
     if request.conversation_id is not None:
         conversation_id = _uuid_with_prefix(request.conversation_id, "conv", "conversationId")
-        if not await store.conversation_exists(conversation_id):
+        if not store.conversation_exists(conversation_id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversación no existe")
     else:
-        conversation_id = await store.create_conversation()
+        conversation_id = store.create_conversation()
 
-    history = await store.get_history(conversation_id)
-    previous_layout = await store.get_last_layout(conversation_id)
+    history = store.get_history(conversation_id)
+    previous_layout = store.get_last_layout(conversation_id)
 
     spec = await StudioUIGenerator().generate(
         request.prompt, history=history, previous_layout=previous_layout
     )
 
-    await store.append_message(conversation_id, "user", request.prompt)
-    await store.append_message(
+    store.append_message(conversation_id, "user", request.prompt)
+    store.append_message(
         conversation_id,
         "assistant",
         spec.reason,
         layout=spec.layout if spec.generated_by == "llm" else None,
     )
-    await store.prune(conversation_id)
-    await session.commit()
 
     return StudioGenerateResponse(
         conversation_id=f"conv_{conversation_id}",

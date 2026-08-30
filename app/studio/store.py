@@ -1,118 +1,92 @@
-"""Server-persisted memory for Studio conversations.
+"""In-memory Studio conversation memory.
 
-Kept deliberately separate from the run engine: a conversation is not a run,
-has no policy/actions, and its only job is remembering recent turns so the
-LLM can edit instead of rebuild. Retention is capped per conversation so the
-table can't grow without bound (see ``DEFAULT_HISTORY_LIMIT``).
+Deliberately volatile, mirroring how ``RunWebSocketHub`` already keeps run
+state in memory in this backend: a process restart clears every
+conversation. While the process stays up, each conversation keeps its own
+history and last generated layout for up to ``RETENTION`` (two months)
+before those turns age out.
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.studio import StudioConversationModel, StudioMessageModel
 from app.schemas.contracts import AssistMessage
 from app.studio.schema import StudioPageNode
 
 
-DEFAULT_HISTORY_LIMIT = 20
+RETENTION = timedelta(days=60)
+
+# Independent of retention: how many recent turns are actually sent to the
+# LLM as context. Two months of a busy conversation could still be far more
+# tokens than any prompt should carry.
+MAX_HISTORY_TURNS = 40
 
 
 @dataclass(frozen=True)
 class StoredMessage:
-    id: uuid.UUID
     role: str
     content: str
     layout: dict[str, Any] | None
-
-
-def _to_history(rows: list[StoredMessage]) -> list[AssistMessage]:
-    """Oldest-first ``AssistMessage`` list, as the LLM payload expects."""
-
-    return [AssistMessage(role=row.role, content=row.content) for row in rows]
-
-
-def _latest_layout(rows: list[StoredMessage]) -> StudioPageNode | None:
-    """The most recent assistant turn that actually produced a layout.
-
-    A blank-fallback turn (``layout is None``) is skipped so a "not
-    available" screen is never mistaken for something to edit.
-    """
-
-    for row in reversed(rows):
-        if row.role == "assistant" and row.layout is not None:
-            return StudioPageNode.model_validate(row.layout)
-    return None
-
-
-def _ids_to_prune(rows: list[StoredMessage], *, keep: int) -> list[uuid.UUID]:
-    """Ids of the oldest rows beyond the retention cap, oldest-first input."""
-
-    overflow = len(rows) - keep
-    if overflow <= 0:
-        return []
-    return [row.id for row in rows[:overflow]]
+    created_at: datetime
 
 
 class StudioConversationStore:
-    def __init__(self, session: AsyncSession, *, history_limit: int = DEFAULT_HISTORY_LIMIT) -> None:
-        self.session = session
-        self.history_limit = history_limit
+    def __init__(
+        self, *, retention: timedelta = RETENTION, max_history: int = MAX_HISTORY_TURNS
+    ) -> None:
+        self._conversations: dict[uuid.UUID, list[StoredMessage]] = {}
+        self._retention = retention
+        self._max_history = max_history
 
-    async def create_conversation(self) -> uuid.UUID:
-        conversation = StudioConversationModel()
-        self.session.add(conversation)
-        await self.session.flush()
-        return conversation.id
+    def create_conversation(self) -> uuid.UUID:
+        conversation_id = uuid.uuid4()
+        self._conversations[conversation_id] = []
+        return conversation_id
 
-    async def conversation_exists(self, conversation_id: uuid.UUID) -> bool:
-        result = await self.session.execute(
-            select(StudioConversationModel.id).where(StudioConversationModel.id == conversation_id)
-        )
-        return result.scalar_one_or_none() is not None
+    def conversation_exists(self, conversation_id: uuid.UUID) -> bool:
+        return conversation_id in self._conversations
 
-    async def _rows(self, conversation_id: uuid.UUID) -> list[StoredMessage]:
-        result = await self.session.execute(
-            select(StudioMessageModel)
-            .where(StudioMessageModel.conversation_id == conversation_id)
-            .order_by(StudioMessageModel.created_at.asc())
-        )
-        return [
-            StoredMessage(id=row.id, role=row.role, content=row.content, layout=row.layout)
-            for row in result.scalars().all()
-        ]
-
-    async def get_history(self, conversation_id: uuid.UUID) -> list[AssistMessage]:
-        return _to_history(await self._rows(conversation_id))
-
-    async def get_last_layout(self, conversation_id: uuid.UUID) -> StudioPageNode | None:
-        return _latest_layout(await self._rows(conversation_id))
-
-    async def append_message(
+    def append_message(
         self,
         conversation_id: uuid.UUID,
         role: str,
         content: str,
         *,
         layout: StudioPageNode | None = None,
+        now: datetime | None = None,
     ) -> None:
-        self.session.add(
-            StudioMessageModel(
-                conversation_id=conversation_id,
+        messages = self._conversations.setdefault(conversation_id, [])
+        messages.append(
+            StoredMessage(
                 role=role,
                 content=content,
                 layout=layout.model_dump(mode="json", by_alias=True) if layout is not None else None,
+                created_at=now or datetime.now(timezone.utc),
             )
         )
-        await self.session.flush()
 
-    async def prune(self, conversation_id: uuid.UUID) -> None:
-        stale_ids = _ids_to_prune(await self._rows(conversation_id), keep=self.history_limit)
-        if not stale_ids:
-            return
-        await self.session.execute(delete(StudioMessageModel).where(StudioMessageModel.id.in_(stale_ids)))
+    def get_history(self, conversation_id: uuid.UUID, *, now: datetime | None = None) -> list[AssistMessage]:
+        messages = self._sweep(conversation_id, now=now)[-self._max_history :]
+        return [AssistMessage(role=message.role, content=message.content) for message in messages]
+
+    def get_last_layout(
+        self, conversation_id: uuid.UUID, *, now: datetime | None = None
+    ) -> StudioPageNode | None:
+        for message in reversed(self._sweep(conversation_id, now=now)):
+            if message.role == "assistant" and message.layout is not None:
+                return StudioPageNode.model_validate(message.layout)
+        return None
+
+    def _sweep(self, conversation_id: uuid.UUID, *, now: datetime | None = None) -> list[StoredMessage]:
+        """Drop turns older than the retention window; return what remains."""
+
+        current_time = now or datetime.now(timezone.utc)
+        messages = self._conversations.get(conversation_id, [])
+        fresh = [message for message in messages if current_time - message.created_at <= self._retention]
+        if conversation_id in self._conversations:
+            self._conversations[conversation_id] = fresh
+        return fresh
