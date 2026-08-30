@@ -7,6 +7,7 @@ from app.demo.driver import DemoDriver
 from app.demo.fixture import SCRIPTED_EVENTS
 from app.demo.provider import MockProvider
 from app.runtime.status import StoredRunStatus
+from app.schemas.contracts import MapProps
 
 
 class DemoProviderAndDriverTests(unittest.IsolatedAsyncioTestCase):
@@ -20,6 +21,11 @@ class DemoProviderAndDriverTests(unittest.IsolatedAsyncioTestCase):
         anomaly = provider.event_for_step("transshipment_anomaly")
         self.assertEqual(anomaly["data"]["delay_days"], 9)
         self.assertIn("pending_decision", anomaly)
+
+        for event in SCRIPTED_EVENTS[:3]:
+            with self.subTest(step=event["step_id"]):
+                route = event["data"]["route"]
+                self.assertIsNotNone(MapProps.model_validate(route))
 
     def test_mock_provider_changes_follow_up_data_for_each_accepted_action(self) -> None:
         provider = MockProvider()

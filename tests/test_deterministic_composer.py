@@ -113,7 +113,7 @@ class DeterministicComposerTests(unittest.TestCase):
                 {"id": "origin", "label": "Origin", "lat": 10, "lon": 20, "kind": "origin"},
                 {"id": "destination", "label": "Destination", "lat": 11, "lon": 21, "kind": "destination"},
             ],
-            "segments": [{"from": "origin", "to": "destination", "status": "active"}],
+            "segments": [{"fromId": "origin", "toId": "destination", "status": "active"}],
         }}}
 
         spec = DeterministicComposer().compose(current)
