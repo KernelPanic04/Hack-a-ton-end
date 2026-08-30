@@ -25,6 +25,21 @@ logger = logging.getLogger(__name__)
 ResponseRequest = Callable[[dict[str, Any], str, float], dict[str, Any]]
 
 
+def _contains_map(node: Any) -> bool:
+    if getattr(node, "type", None) == "map":
+        return True
+    return any(_contains_map(child) for child in getattr(node, "children", []))
+
+
+def _map_props(node: Any) -> list[dict[str, Any]]:
+    current = []
+    if getattr(node, "type", None) == "map":
+        current.append(node.props.model_dump(mode="json", by_alias=True))
+    for child in getattr(node, "children", []):
+        current.extend(_map_props(child))
+    return current
+
+
 def _output_text(response: dict[str, Any]) -> str:
     for item in response.get("output", []):
         for content in item.get("content", []):
@@ -105,6 +120,8 @@ class LLMComposer:
                 "Use only nodes permitted by the output schema. Never invent "
                 "run metadata or actions. If you render a decisionPanel, its "
                 "actionId values must come exactly from availableActionIds. "
+                "If deterministicLayout contains a map node, preserve a map node "
+                "with its route data while reorganizing the hierarchy. "
                 "Keep labels concise and explain the layout choice in reason."
             ),
             "input": json.dumps(input_payload, separators=(",", ":")),
@@ -132,6 +149,8 @@ class LLMComposer:
                     timeout=self.timeout_seconds,
                 )
                 upgrade = validate_llm_upgrade(_output_text(response))
+                if _contains_map(baseline.layout) and _map_props(baseline.layout) != _map_props(upgrade.layout):
+                    raise ValueError("LLM upgrade changed or removed a trusted map node")
                 return merge_llm_upgrade(baseline, upgrade)
             except Exception as exc:  # provider, timeout and schema failures all fall back
                 if attempt >= self.retries:

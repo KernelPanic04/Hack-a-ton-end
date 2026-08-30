@@ -106,5 +106,20 @@ class DeterministicComposerTests(unittest.TestCase):
         self.assertNotEqual(tree_types(anomaly), tree_types(decision))
         self.assertIn("anomaly", anomaly.reason.lower())
 
+    def test_route_shaped_operation_data_adds_a_map_node(self) -> None:
+        current = make_projection()
+        current.operation["event"] = {"data": {"route": {
+            "waypoints": [
+                {"id": "origin", "label": "Origin", "lat": 10, "lon": 20, "kind": "origin"},
+                {"id": "destination", "label": "Destination", "lat": 11, "lon": 21, "kind": "destination"},
+            ],
+            "segments": [{"from": "origin", "to": "destination", "status": "active"}],
+        }}}
+
+        spec = DeterministicComposer().compose(current)
+        route_map = self._node_by_type(spec.layout, "map")
+        self.assertIsNotNone(route_map)
+        self.assertEqual(route_map.props.segments[0].status, "active")
+
 if __name__ == "__main__":
     unittest.main()

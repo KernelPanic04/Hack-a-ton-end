@@ -25,12 +25,24 @@ class DemoDriver:
         self.run_engine = RunEngine(session)
         self.provider = provider or MockProvider()
 
-    async def start_new_run(self) -> RunModel:
+    async def start_new_run(self, *, operation_id: str | None = None) -> RunModel:
         """Bootstrap de la demo: asegura el workflow del golden path (v1) y
         arranca un run nuevo contra él."""
         workflow, version_row = await self.run_engine.flow_engine.seed_golden_path()
         flow = self.run_engine.flow_engine.to_flow_definition(version_row)
-        return await self.run_engine.start_run(workflow.id, version_row.id, flow)
+        initial_state = {"_operation_id": operation_id} if operation_id else None
+        return await self.run_engine.start_run(
+            workflow.id, version_row.id, flow, initial_state=initial_state
+        )
+
+    async def start_moment(self, moment: int) -> RunModel:
+        """Create a separate run for M1, M2 or M3 of the same demo operation."""
+        if moment not in {1, 2, 3}:
+            raise DemoDriverError("El momento debe ser 1, 2 o 3")
+        run = await self.start_new_run(operation_id="op_muebles_del_sur_4471")
+        for _ in range(moment):
+            run = await self.advance(run.id)
+        return run
 
     async def advance(self, run_id: uuid.UUID) -> RunModel:
         """Toma el paso actual del run, busca su evento guionizado en el mock

@@ -47,6 +47,7 @@ def _id(prefix: str) -> Field:
 WorkflowId: TypeAlias = Annotated[str, _id("wf")]
 StepId: TypeAlias = Annotated[str, _id("step")]
 RunId: TypeAlias = Annotated[str, _id("run")]
+OperationId: TypeAlias = Annotated[str, _id("op")]
 DecisionId: TypeAlias = Annotated[str, _id("dec")]
 ActionId: TypeAlias = Annotated[str, _id("act")]
 EventId: TypeAlias = Annotated[str, _id("evt")]
@@ -131,6 +132,7 @@ class RunEvent(ContractModel):
 class RunProjection(ContractModel):
     schema_version: Literal["1"] = SCHEMA_VERSION
     run_id: RunId
+    operation_id: OperationId | None = None
     workflow_id: WorkflowId
     workflow_version: int = Field(ge=1)
     state_version: int = Field(ge=0)
@@ -272,6 +274,33 @@ class StepProps(ContractModel):
     emphasis: Emphasis = "normal"
 
 
+class MapWaypoint(ContractModel):
+    id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.-]+$")
+    label: str = Field(min_length=1, max_length=120)
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    kind: Literal["origin", "stop", "destination"]
+
+
+class MapMarker(ContractModel):
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    label: str = Field(min_length=1, max_length=120)
+
+
+class MapSegment(ContractModel):
+    from_id: str = Field(alias="from", min_length=1, max_length=80)
+    to: str = Field(min_length=1, max_length=80)
+    status: Literal["planned", "active", "diverted"]
+
+
+class MapProps(ContractModel):
+    waypoints: list[MapWaypoint] = Field(min_length=2)
+    marker: MapMarker | None = None
+    segments: list[MapSegment] = Field(min_length=1)
+    emphasis: Emphasis = "normal"
+
+
 class PageNode(ContractModel):
     id: UINodeId
     type: Literal["page"]
@@ -328,6 +357,12 @@ class StepNode(ContractModel):
     props: StepProps
 
 
+class MapNode(ContractModel):
+    id: UINodeId
+    type: Literal["map"]
+    props: MapProps
+
+
 UINode: TypeAlias = Annotated[
     PageNode
     | SectionNode
@@ -337,7 +372,8 @@ UINode: TypeAlias = Annotated[
     | KeyValueNode
     | CompareNode
     | DecisionPanelNode
-    | StepNode,
+    | StepNode
+    | MapNode,
     Field(discriminator="type"),
 ]
 
@@ -439,6 +475,7 @@ COMPONENT_TYPES = (
     "compare",
     "decisionPanel",
     "step",
+    "map",
 )
 
 

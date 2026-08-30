@@ -99,7 +99,7 @@ def ui_spec() -> UISpec:
 
 class ContractTests(unittest.TestCase):
     def test_registry_and_server_message_counts_are_frozen(self) -> None:
-        self.assertEqual(len(COMPONENT_TYPES), 9)
+        self.assertEqual(len(COMPONENT_TYPES), 10)
         self.assertEqual(len(SERVER_MESSAGE_TYPES), 12)
 
     def test_wire_dump_uses_camel_case(self) -> None:

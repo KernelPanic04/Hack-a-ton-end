@@ -34,6 +34,7 @@ from app.schemas.contracts import (
 
 _PENDING_DECISION_KEY = "_pending_decision"
 _UI_SPEC_KEY = "_ui_spec"
+_OPERATION_ID_KEY = "_operation_id"
 
 
 def _wire_id(prefix: str, value: object) -> str:
@@ -53,10 +54,15 @@ def _projection_status(stored_status: str) -> str:
 
 def _action_definition(action_id: str) -> ActionDefinition:
     normalized = _wire_id("act", action_id)
+    labels = {
+        "act_accept_delay": "Esperar",
+        "act_find_alternative": "Buscar alternativa",
+        "act_notify_client": "Notificar al cliente",
+    }
     return ActionDefinition(
         action_id=normalized,
-        label=normalized.removeprefix("act_").replace("_", " ").title(),
-        risk="medium",
+        label=labels.get(normalized, normalized.removeprefix("act_").replace("_", " ").title()),
+        risk="low" if normalized == "act_notify_client" else "medium",
         requires_human=True,
     )
 
@@ -75,6 +81,7 @@ class RunEngine:
         workflow_id: uuid.UUID,
         workflow_version_id: uuid.UUID,
         flow: FlowDefinition,
+        initial_state: dict[str, Any] | None = None,
     ) -> RunModel:
         first_step = flow.first_step()
         run = RunModel(
@@ -82,7 +89,7 @@ class RunEngine:
             workflow_version_id=workflow_version_id,
             status=StoredRunStatus.RUNNING.value,
             current_step_id=first_step.id,
-            state={},
+            state=initial_state or {},
             state_version=0,
         )
         self.session.add(run)
@@ -318,6 +325,7 @@ class RunEngine:
 
         return RunProjection(
             run_id=wire_run_id,
+            operation_id=run.state.get(_OPERATION_ID_KEY),
             workflow_id=wire_workflow_id,
             workflow_version=version_row.version,
             state_version=run.state_version,
@@ -327,7 +335,7 @@ class RunEngine:
             operation={
                 key: value
                 for key, value in run.state.items()
-                if key not in {_PENDING_DECISION_KEY, _UI_SPEC_KEY}
+                if key not in {_PENDING_DECISION_KEY, _UI_SPEC_KEY, _OPERATION_ID_KEY}
             },
             recent_events=recent_events[-50:],
             pending_decision=pending_request,

@@ -4,6 +4,31 @@ Formato: fecha, decisión, alternativas consideradas, razón, responsable, conse
 
 ---
 
+## 2026-08-29 — Roadmap v2 y adenda de contrato para momentos M1–M3
+
+**Decisión:** adoptar `NEXTWAVE_RETO_03_v2_ROADMAP.md` como el plan posterior a
+las fases 0–4 del v1. La adenda v1.1 incorpora el nodo declarativo `map`, el
+identificador compartido `operationId` y la acción `act_notify_client` para el
+caso Muebles del Sur Vietnam → México.
+
+**Alternativas consideradas:** mantener las nueve primitivas originales y
+simular la ruta con `keyValue`, o dejar los tres momentos dentro de un único
+run. Descartadas: no prueban mapa ni evolución de la interfaz entre runs que
+pide el caso final.
+
+**Razón:** el nodo se mantiene genérico (waypoints, marker y segments) y no
+entrega autoridad al LLM; el backend valida toda UISpec y conserva las acciones
+permitidas. Cada momento se puede crear como un run separado de la misma
+operación mediante `/demo/moment/{n}`.
+
+**Responsable:** D, con implementación backend A/C para 4.A–4.B.
+
+**Consecuencias:** el frontend debe actualizar su espejo TypeScript y registry
+para renderizar `map` antes de GR1. Con mapa presente, un upgrade LLM que lo
+omita se rechaza y queda visible la UISpec determinista.
+
+---
+
 ## 2026-08-29 — Eliminar módulo de usuarios/auth del backend
 
 **Decisión:** eliminar por completo el CRUD de `users`, el módulo duplicado `user_test`

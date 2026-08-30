@@ -246,6 +246,18 @@ async def create_demo_skeleton(session: AsyncSession = Depends(get_db)) -> RunPr
         raise _runtime_error(exc) from exc
 
 
+@app.post("/demo/moment/{moment}", response_model=RunProjection, tags=["Demo"])
+async def create_demo_moment(moment: int, session: AsyncSession = Depends(get_db)) -> RunProjection:
+    """Create M1/M2/M3 as a distinct run of the shared demo operation."""
+    driver = DemoDriver(session)
+    try:
+        run = await driver.start_moment(moment)
+        await RuntimePipeline(session, app.state.ws_hub).publish_current(run.id)
+        return await driver.run_engine.get_projection(run.id)
+    except (RunEngineError, DemoDriverError) as exc:
+        raise _runtime_error(exc) from exc
+
+
 @app.get("/runs/{run_id}/projection", response_model=RunProjection, tags=["Runs"])
 async def get_run_projection(
     run_id: str, session: AsyncSession = Depends(get_db)
