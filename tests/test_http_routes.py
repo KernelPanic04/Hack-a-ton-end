@@ -21,6 +21,7 @@ class HttpRoutesTests(unittest.TestCase):
         self.assertIn(("/runs/{run_id}/assist", frozenset({"POST"})), routes)
         self.assertIn(("/runs/{run_id}/snapshot", frozenset({"GET"})), routes)
         self.assertIn(("/runs/{run_id}/events", frozenset({"GET"})), routes)
+        self.assertIn(("/studio/generate", frozenset({"POST"})), routes)
         self.assertTrue(any(route.path == "/ws/runs/{run_id}" for route in app.routes))
 
     def test_run_id_parser_accepts_wire_and_raw_uuid(self) -> None:

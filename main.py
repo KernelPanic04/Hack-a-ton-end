@@ -23,6 +23,7 @@ from app.schemas.contracts import (
     UIUpdatedEnvelope,
 )
 from app.policy import ActionCoordinator
+from app.studio import StudioUIGenerator, StudioUISpec
 from app.synthesis import AriAssistant
 from app.ws import RunWebSocketHub
 
@@ -100,6 +101,14 @@ class WorkflowVersionCreateRequest(BaseModel):
 
     steps: list[StepDefinition] = Field(min_length=1)
     base_version: int | None = Field(default=None, ge=1)
+
+
+class StudioGenerateRequest(BaseModel):
+    """Free-text request for a standalone, run-agnostic UI layout."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    prompt: str = Field(min_length=1, max_length=2000)
 
 
 class WorkflowVersionResponse(BaseModel):
@@ -287,6 +296,17 @@ async def assist_run(
         return await AriAssistant().respond(projection, events[-20:], request)
     except RunEngineError as exc:
         raise _runtime_error(exc) from exc
+
+
+@app.post("/studio/generate", response_model=StudioUISpec, tags=["Studio"])
+async def generate_studio_ui(request: StudioGenerateRequest) -> StudioUISpec:
+    """Generate a standalone UI layout from a free-text prompt.
+
+    No run, workflow, or policy-authorized action is involved: the backend
+    only produces this JSON for the frontend's dedicated Studio renderer to
+    consume.
+    """
+    return await StudioUIGenerator().generate(request.prompt)
 
 
 @app.get(
