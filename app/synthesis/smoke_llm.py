@@ -35,7 +35,7 @@ async def run_smoke_test(*, fixture_path: Path, model: str) -> dict[str, object]
 
     started = time.perf_counter()
     upgraded = await LLMComposer(model=model).compose_upgrade(projection, baseline)
-    result = upgraded or baseline
+    result = upgraded if upgraded is not None else baseline
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
     UISpec.model_validate(result.model_dump(mode="json"))
 
@@ -44,7 +44,11 @@ async def run_smoke_test(*, fixture_path: Path, model: str) -> dict[str, object]
         "model": model,
         "latencyMs": latency_ms,
         "generatedBy": result.generated_by,
-        "usedDeterministicFallback": upgraded is None,
+        # "fallback" means every retry failed and a blank placeholder was
+        # shown instead of a deterministic guess; upgraded is None only when
+        # the composer is disabled outright (not exercised by this script,
+        # since it requires OPENAI_API_KEY).
+        "usedBlankFallback": result.generated_by == "fallback",
         "stateVersion": result.state_version,
         "allowedActionCount": len(result.allowed_actions),
         "pydanticValidated": True,
@@ -58,7 +62,7 @@ def main() -> int:
     parser.add_argument(
         "--allow-fallback",
         action="store_true",
-        help="Exit successfully when the deterministic fallback is used.",
+        help="Exit successfully when the blank fallback is used (all retries failed).",
     )
     args = parser.parse_args()
 
@@ -70,7 +74,7 @@ def main() -> int:
 
     result = asyncio.run(run_smoke_test(fixture_path=args.fixture, model=args.model))
     print(json.dumps(result, separators=(",", ":")))
-    if result["usedDeterministicFallback"] and not args.allow_fallback:
+    if result["usedBlankFallback"] and not args.allow_fallback:
         return 1
     return 0
 

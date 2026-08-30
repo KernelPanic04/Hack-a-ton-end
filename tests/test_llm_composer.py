@@ -108,8 +108,16 @@ class LLMComposerTests(unittest.IsolatedAsyncioTestCase):
                 "reason": "Attempted simplification.", "layout": layout
             })}]}]}
 
-        composer = LLMComposer(api_key="test-key", enabled=True, request_response=request_response)
-        self.assertIsNone(await composer.compose_upgrade(current, baseline))
+        composer = LLMComposer(
+            api_key="test-key", enabled=True, retries=1, request_response=request_response
+        )
+        result = await composer.compose_upgrade(current, baseline)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.generated_by, "fallback")
+        self.assertEqual(result.state_version, baseline.state_version)
+        self.assertEqual(result.allowed_actions, baseline.allowed_actions)
+        self.assertIn("2 intentos", result.reason)
+        self.assertIn("Error", result.reason)
 
 
 if __name__ == "__main__":

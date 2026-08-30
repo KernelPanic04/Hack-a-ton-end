@@ -48,6 +48,25 @@ class GenericStepLLMExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.verdict, "pass")
 
+    async def test_exhausted_retries_return_blank_result_not_none(self) -> None:
+        request_response = Mock(return_value={"output": []})  # always invalid, never succeeds
+        executor = GenericStepLLMExecutor(
+            api_key="test-key",
+            enabled=True,
+            retries=2,
+            request_response=request_response,
+        )
+
+        result = await executor.analyze(
+            objective="Check supplied values.", resolved_inputs={}, missing_inputs=[]
+        )
+
+        self.assertEqual(request_response.call_count, 3)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.verdict, "unknown")
+        self.assertIn("3 intentos", result.summary)
+        self.assertIn("no output_text content", result.summary)
+
     async def test_returns_none_when_unconfigured(self) -> None:
         executor = GenericStepLLMExecutor(api_key="")
 
