@@ -16,7 +16,6 @@ from app.runtime.pipeline import RuntimePipeline
 from app.schemas.contracts import (
     ActionAcceptedEnvelope,
     ActionSubmittedEnvelope,
-    AssistMessage,
     AssistRequest,
     AssistResponse,
     RunEvent,
@@ -24,14 +23,16 @@ from app.schemas.contracts import (
     UIUpdatedEnvelope,
 )
 from app.policy import ActionCoordinator
-from app.studio import StudioUIGenerator, StudioUISpec
+from app.studio import StudioUIGenerator
 from app.studio.schema import StudioPageNode
+from app.studio.store import StudioConversationStore
 from app.synthesis import AriAssistant
 from app.ws import RunWebSocketHub
 
 # Importante: cargar los modelos antes de crear tablas.
 from app.models.workflow import WorkflowDefinitionModel, WorkflowVersionModel  # noqa: F401
 from app.models.run import RunModel, RunEventModel, HumanDecisionModel  # noqa: F401
+from app.models.studio import StudioConversationModel, StudioMessageModel  # noqa: F401
 
 # Orígenes permitidos para llamadas desde el frontend (CORS).
 #
@@ -108,16 +109,26 @@ class WorkflowVersionCreateRequest(BaseModel):
 class StudioGenerateRequest(BaseModel):
     """Free-text request for a standalone, run-agnostic UI layout.
 
-    Stateless like ``AssistRequest``: the frontend resends ``history`` and the
-    last ``previousLayout`` on every call so the LLM can refine instead of
-    rebuilding from scratch. The backend keeps no conversation of its own.
+    ``conversationId`` is optional: omit it to start a new conversation, or
+    send back the one a prior response returned to continue it. History and
+    the last generated layout are persisted server-side (see
+    ``app/studio/store.py``) — the client never resends them itself.
     """
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 
     prompt: str = Field(min_length=1, max_length=2000)
-    history: list[AssistMessage] = Field(default_factory=list, max_length=20)
-    previous_layout: StudioPageNode | None = None
+    conversation_id: str | None = None
+
+
+class StudioGenerateResponse(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, serialize_by_alias=True)
+
+    conversation_id: str
+    schema_version: str
+    generated_by: str
+    reason: str
+    layout: StudioPageNode
 
 
 class WorkflowVersionResponse(BaseModel):
@@ -307,18 +318,48 @@ async def assist_run(
         raise _runtime_error(exc) from exc
 
 
-@app.post("/studio/generate", response_model=StudioUISpec, tags=["Studio"])
-async def generate_studio_ui(request: StudioGenerateRequest) -> StudioUISpec:
+@app.post("/studio/generate", response_model=StudioGenerateResponse, tags=["Studio"])
+async def generate_studio_ui(
+    request: StudioGenerateRequest, session: AsyncSession = Depends(get_db)
+) -> StudioGenerateResponse:
     """Generate a standalone UI layout from a free-text prompt.
 
-    No run, workflow, or policy-authorized action is involved: the backend
-    only produces this JSON for the frontend's dedicated Studio renderer to
-    consume.
+    No run, workflow, or policy-authorized action is involved. History and the
+    last generated layout are persisted per ``conversationId`` (capped at the
+    most recent turns, see ``StudioConversationStore``) so a follow-up prompt
+    can edit what was already built instead of starting over.
     """
-    return await StudioUIGenerator().generate(
-        request.prompt,
-        history=request.history,
-        previous_layout=request.previous_layout,
+    store = StudioConversationStore(session)
+    if request.conversation_id is not None:
+        conversation_id = _uuid_with_prefix(request.conversation_id, "conv", "conversationId")
+        if not await store.conversation_exists(conversation_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversación no existe")
+    else:
+        conversation_id = await store.create_conversation()
+
+    history = await store.get_history(conversation_id)
+    previous_layout = await store.get_last_layout(conversation_id)
+
+    spec = await StudioUIGenerator().generate(
+        request.prompt, history=history, previous_layout=previous_layout
+    )
+
+    await store.append_message(conversation_id, "user", request.prompt)
+    await store.append_message(
+        conversation_id,
+        "assistant",
+        spec.reason,
+        layout=spec.layout if spec.generated_by == "llm" else None,
+    )
+    await store.prune(conversation_id)
+    await session.commit()
+
+    return StudioGenerateResponse(
+        conversation_id=f"conv_{conversation_id}",
+        schema_version=spec.schema_version,
+        generated_by=spec.generated_by,
+        reason=spec.reason,
+        layout=spec.layout,
     )
 
 
