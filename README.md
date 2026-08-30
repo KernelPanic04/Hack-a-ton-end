@@ -1,44 +1,55 @@
-# Hack-a-ton-end · NextWave 2026 Challenge 03
+# Hack-a-ton-end · Kernel Panic
 
-Backend FastAPI del runtime de agentes de Kernel Panic. La rama `dev` contiene
-la arquitectura modular vigente: workflows versionados, reducer de runs, event
-log append-only, fixture/demo driver y contratos Pydantic compartidos. Consulta
-`AGENTS.md` para el roadmap y los gates de entrega.
+Backend FastAPI de Kernel Panic. El repositorio contiene **dos sistemas**:
 
-## Arquitectura actual
+1. **Studio** (`app/studio/`) — el producto vivo hoy: generación de interfaces a
+   partir de un prompt de texto libre. Es lo único que el frontend actual
+   (`Hack-a-ton-front`) renderiza.
+2. **Runtime de agente** (`app/flow/`, `app/runtime/`, `app/synthesis/`,
+   `app/policy/`, `app/ws/`, `app/demo/`) — un motor de workflows versionados
+   con WebSocket, decisiones humanas y una UI generada por proyección de
+   estado. Sigue completo, probado y expuesto por HTTP/WS, pero el frontend ya
+   no enruta a él (ver `Hack-a-ton-front/README.md`, sección "Studio vs.
+   runtime heredado"). Trátalo como un módulo estable pero dormido, no como
+   trabajo en progreso.
 
-| Ruta | Responsabilidad |
-|---|---|
-| `app/flow/` | Definiciones y versiones inmutables de workflows |
-| `app/runtime/` | Ejecución, transiciones y proyección de runs |
-| `app/synthesis/` | Composer determinista/LLM y structured output de pasos genéricos |
-| `app/policy/` | Validación declarativa y coordinación de acciones humanas |
-| `app/ws/` | Hub WebSocket en memoria por run y envelopes tipados |
-| `app/demo/` | Golden path, mock provider y demo driver |
-| `app/models/` | Tablas SQLAlchemy de workflows, runs, eventos y decisiones |
-| `app/schemas/contracts.py` | Contrato v1 ejecutable para backend/frontend/WS |
-| `main.py` | Aplicación FastAPI, CORS, lifecycle y healthcheck |
+Si vienes a trabajar en el producto, casi seguro es en Studio. El resto de
+este README documenta ambos, en ese orden.
 
-La arquitectura Controller–Service–Repository del template anterior ya no es
-la estructura principal del runtime. Los módulos se organizan por capacidad del
-roadmap y comparten PostgreSQL dentro del mismo monolito modular.
+## Arranque rápido
 
-```mermaid
-flowchart LR
-    HTTP[POST /runs o /demo/advance] --> Engine[RunEngine + event log]
-    Engine --> Projection[RunProjection]
-    Projection --> Composer[Composer determinista]
-    Composer --> WS[UISpec por WebSocket]
-    WS --> Frontend[Renderer recursivo]
-    Frontend -->|ACTION_SUBMITTED| Policy[Policy + ActionCoordinator]
-    Policy -->|ACTION_ACCEPTED / ACTION_REJECTED| WS
-    Policy --> Engine
+```bash
+docker compose -f docker/docker-compose.yml up -d postgres
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env          # agrega tu OPENAI_API_KEY para que Studio genere algo
+set -a && source .env && set +a
+.venv/bin/uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-## Requisitos
+Verifica: `curl http://localhost:8000/health` → `{"status":"ok"}`. Swagger en
+`http://localhost:8000/docs`.
 
-- Docker con Docker Compose para el flujo recomendado.
-- Python 3.12+ solamente si se ejecutará FastAPI fuera de Docker.
+`uvicorn` **no** carga `.env` solo; por eso el `source` antes de levantarlo (o
+usa `docker compose up --build -d`, que sí inyecta las variables — ver más
+abajo).
+
+### Alternativa: todo con Docker
+
+```bash
+docker compose -f docker/docker-compose.yml up --build -d
+docker compose -f docker/docker-compose.yml ps
+curl --fail http://localhost:8000/health
+```
+
+| Servicio | URL/puerto del host | Puerto interno |
+|---|---|---:|
+| FastAPI | `http://localhost:8000` | `8000` |
+| Swagger | `http://localhost:8000/docs` | `8000` |
+| Health | `http://localhost:8000/health` | `8000` |
+| PostgreSQL | `localhost:5433` | `5432` |
+
+No ejecutes además `uvicorn` en el puerto 8000 si Compose ya levantó el backend.
 
 ## Variables de entorno
 
@@ -48,208 +59,134 @@ cp .env.example .env
 
 | Variable | Default | Uso |
 |---|---:|---|
-| `BACKEND_PORT` | `8000` | Puerto de FastAPI publicado en el host |
+| `BACKEND_PORT` | `8000` | Puerto de FastAPI publicado en el host (solo Compose) |
 | `POSTGRES_PORT` | `5433` | Puerto de PostgreSQL publicado en el host |
 | `PORT` | `8000` | Puerto interno de FastAPI en el contenedor |
-| `DEMO_TOKEN` | placeholder | Token compartido del handshake WebSocket de demo |
+| `DATABASE_URL` | Postgres local `:5433` | Override completo de conexión (Railway lo inyecta) |
 | `ALLOWED_ORIGINS` | frontend `5173`/`5174`/`3000` | Lista CORS separada por comas |
-| `OPENAI_API_KEY` | vacío | Activa el upgrade progresivo de `UISpec` |
-| `OPENAI_MODEL` | `gpt-5.4-mini` | Modelo usado por Responses API |
-| `LLM_UPGRADE_ENABLED` | `true` | Kill switch; sin key siempre usa determinista |
-| `GENERIC_STEP_LLM_ENABLED` | `true` | Kill switch del análisis LLM para pasos creados en runtime |
-| `ASSISTANT_ENABLED` | `true` | Kill switch del chat de Ari; usa la misma key, siempre en backend |
-| `SQL_ECHO` | `false` | Activa explícitamente el log detallado de SQLAlchemy |
+| `OPENAI_API_KEY` | vacío | **Requerida para que Studio genere algo.** Sin ella, `/studio/generate` responde un layout de "interfaz no disponible" — no hay fallback determinista para prompts arbitrarios |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | Modelo usado por Studio y por el runtime heredado |
+| `STUDIO_GENERATION_ENABLED` | `true` | Kill switch de Studio. En `false`, siempre responde el layout de "no disponible" |
+| `STUDIO_GENERATION_TIMEOUT_SECONDS` | `25` | Timeout por intento contra el proveedor (Studio reintenta hasta 5 veces) |
+| `DEMO_TOKEN` | placeholder | Token del handshake WebSocket del runtime heredado (no lo usa Studio) |
+| `LLM_UPGRADE_ENABLED` | `true` | Kill switch del upgrade LLM del runtime heredado |
+| `GENERIC_STEP_LLM_ENABLED` | `true` | Kill switch del runtime heredado para pasos creados en vivo |
+| `ASSISTANT_ENABLED` | `true` | Kill switch del asistente Ari del runtime heredado |
+| `SQL_ECHO` | `false` | Log detallado de SQLAlchemy |
 
-`DEMO_TOKEN` debe coincidir con `VITE_DEMO_TOKEN` del frontend. Es un control
-exclusivo de la demo, no una credencial de producción. Nunca commitees `.env`.
+`DEMO_TOKEN` debe coincidir con `VITE_DEMO_TOKEN` del frontend si algún día se
+vuelve a enrutar `/demo`. Nunca commitees `.env`.
 
-## Fase 3 · decisión humana y síntesis progresiva
+## Arquitectura
 
-Cada transición publica y persiste primero una `UISpec` determinista. Si
-`OPENAI_API_KEY` está disponible, `app/synthesis/llm.py` solicita después una
-mejora con structured outputs, timeout de 5 segundos y un retry. Pydantic
-revalida el árbol y el backend conserva bajo su autoridad IDs, versiones y
-`availableActions`; cualquier fallo mantiene intacta la UI determinista.
-
-`GET /runs/{id}/snapshot` devuelve el último envelope `UI_UPDATED` completo
-para reconexión y polling. El WebSocket sigue reproduciendo el mismo snapshot
-al conectarse y aplica el policy engine antes de aceptar una decisión.
-
-### Prueba manual de la mejora LLM
-
-Con `OPENAI_API_KEY` en `.env`, este comando realiza una sola llamada real
-contra la fixture grabada. Solo imprime modelo, latencia y el resultado de la
-validación; nunca muestra la clave ni el layout completo.
-
-```powershell
-.venv\Scripts\python.exe -m app.synthesis.smoke_llm
+```mermaid
+flowchart LR
+    subgraph Studio["Studio (vivo)"]
+        Prompt[POST /studio/generate] --> Gen[StudioUIGenerator]
+        Gen -->|structured output| Schema[app/studio/schema.py]
+        Schema --> Store[(studio_conversations\nstudio_messages)]
+        Store --> UI[Frontend: src/studio/StudioRenderer.tsx]
+    end
+    subgraph Legacy["Runtime de agente (heredado, sin ruta en el frontend)"]
+        HTTP[POST /runs, /demo/advance] --> Engine[RunEngine + event log]
+        Engine --> Projection[RunProjection]
+        Projection --> Composer[Composer determinista/LLM]
+        Composer --> WS[UISpec por WebSocket]
+    end
 ```
 
-Para comprobar el flujo progresivo con Postman o Insomnia, crea un run con
-`POST /runs`, espera unos segundos y consulta:
+| Ruta | Responsabilidad |
+|---|---|
+| `app/studio/schema.py` | Nodos del layout de Studio (Pydantic, discriminated union) |
+| `app/studio/llm.py` | Prompt al proveedor, structured output, fallback y reintentos |
+| `app/studio/store.py` | Persistencia de conversaciones/mensajes/feedback |
+| `app/models/studio.py` | Tablas SQLAlchemy: `studio_conversations`, `studio_messages`, `studio_conversation_feedback` |
+| `app/flow/` | *(heredado)* Definiciones y versiones inmutables de workflows |
+| `app/runtime/` | *(heredado)* Ejecución, transiciones y proyección de runs |
+| `app/synthesis/` | *(heredado)* Composer determinista/LLM de pasos genéricos |
+| `app/policy/` | *(heredado)* Validación declarativa y coordinación de acciones humanas |
+| `app/ws/` | *(heredado)* Hub WebSocket en memoria por run |
+| `app/demo/` | *(heredado)* Golden path, mock provider y demo driver |
+| `app/schemas/contracts.py` | Contrato v1 ejecutable compartido por el runtime heredado |
+| `main.py` | Aplicación FastAPI, CORS, lifecycle, healthcheck y todas las rutas |
 
-```text
-GET http://localhost:8000/runs/run_<uuid>/snapshot
-```
+## Studio
 
-El envelope tendrá `payload.uiSpec.generatedBy: "llm"` cuando el upgrade se
-publique; si el proveedor falla, el snapshot determinista permanece disponible.
+`POST /studio/generate` recibe `{ "prompt": "...", "conversationId"?: "...", "name"?: "..." }`
+y devuelve un layout declarativo validado. Sin `conversationId`, crea un
+proyecto nuevo; con él, trata el prompt como una edición del layout anterior
+(reutiliza ids de nodo, conserva lo que no cambió).
 
-## Fase 5 · fallbacks y freeze
+### Tipos de nodo (`app/studio/schema.py`)
 
-La API siempre persiste y publica primero una `UISpec` determinista a partir de
-`RunProjection`. Los upgrades externos son opcionales: con ambos kill switches
-en `false`, el golden path, las decisiones y los pasos genéricos siguen
-funcionando sin red ni clave de proveedor.
+Contenedores: `page`, `section` (con `direction`/`gap`/`align`/`justify` y
+`backgroundColor`).
 
-```env
-LLM_UPGRADE_ENABLED=false
-GENERIC_STEP_LLM_ENABLED=false
-ASSISTANT_ENABLED=false
-SQL_ECHO=false
-```
+Contenido: `metric`, `alert`, `timeline`, `keyValue`, `compare`, `step`, `map`
+(reutilizados del contrato del runtime heredado, `app/schemas/contracts.py`),
+`button`, `text`.
 
-El smoke HTTP verifica que un payload real produce un snapshot `UI_UPDATED`,
-que sus versiones coinciden y que el árbol solo usa los nueve tipos del
-registry. Acepta una URL directa del backend o el proxy `/api` del frontend:
+Interactivos y de datos (propios de Studio): `searchBar`, `dropdown`, `chart`
+(bar/line/pie), `table` (hasta 250 filas), `progress`, `tags`.
 
-```bash
-.venv/bin/python scripts/smoke_phase5.py \
-  --base-url http://127.0.0.1:8000 \
-  --expected-generator deterministic \
-  --token "$DEMO_TOKEN"
-```
+- **Color:** `button`, `text`, `progress`, cada item de `tags` y cada punto de
+  `chart` aceptan un `color` hex opcional (`^#[0-9a-fA-F]{6}$`); `page` y
+  `section` aceptan `backgroundColor`. El modelo debe fijarlo explícitamente
+  cuando el prompt pide recolorear algo — no basta con describirlo en `reason`.
+- **Filtrado client-side:** `searchBar`/`dropdown` aceptan `filterTarget`
+  (id de un `table`/`tags` del mismo layout) y `dropdown` además
+  `filterColumn`. El backend valida que la referencia exista y apunte a un
+  nodo filtrable; el filtrado en sí corre 100% en el navegador
+  (`FilterContext` en `StudioRenderer.tsx`), sin round-trip.
+- **`map`:** reutiliza `MapProps` del contrato heredado (waypoints, segments,
+  marker); el frontend lo renderiza con el mismo `RouteMap.tsx` (MapLibre GL)
+  que usaba el runtime.
 
-Usa `--expected-generator llm` únicamente cuando `OPENAI_API_KEY` esté
-configurada y el upgrade progresivo deba formar parte de la prueba.
+Cualquier tipo o prop fuera de este esquema es rechazado por el `strict` JSON
+Schema que se le pasa al proveedor — el modelo no puede inventar nodos.
 
-## Fase 4 · trial-by-fire
-
-`POST /workflows/{workflowId}/versions` acepta `baseVersion` junto con los pasos
-nuevos. El backend copia esa versión inmutable y anexa las definiciones del
-request; así el paso inventado se ejecuta después del flow base y puede resolver
-rutas reales como `delivery_eta.data.final_eta`.
-
-Cuando el mock provider no reconoce el paso, `GenericStepExecutor` resuelve sus
-inputs desde el estado, produce el fallback determinista y usa el structured
-output LLM cuando está disponible. `requiresHumanReview` pausa el run con
-`act_acknowledge`; al aceptarlo, el paso registra `STEP_COMPLETED` antes de
-continuar o cerrar el run.
-
-El trial completo, incluido WebSocket, timeline, `UISpec` y export del event
-log, se reproduce con:
-
-```bash
-python scripts/smoke_phase4.py \
-  --base-url http://127.0.0.1:8000 \
-  --token "$DEMO_TOKEN"
-```
-
-## Asistente Ari
-
-`POST /runs/{runId}/assist` recibe `{ "message": "...", "history": [] }` y
-devuelve una respuesta estructurada con `reply`, `recommendedActions` y, si se
-solicita, `proposedStep`. El backend aporta la proyección, los últimos eventos
-y las acciones permitidas; Ari no puede ejecutar acciones ni crear versiones.
-Los chips del frontend deben enviar cualquier recomendación por el WebSocket y
-la policy existente. Si falta la key, el proveedor falla o
-`ASSISTANT_ENABLED=false`, responde una explicación determinista sin acciones.
-
-## Inicio recomendado: backend completo con Docker
-
-Desde la raíz del repositorio:
-
-```bash
-docker compose -f docker/docker-compose.yml up --build -d
-docker compose -f docker/docker-compose.yml ps
-curl --fail http://localhost:8000/health
-```
-
-Servicios publicados:
-
-| Servicio | URL/puerto del host | Puerto interno |
-|---|---|---:|
-| FastAPI | `http://localhost:8000` | `8000` |
-| Swagger | `http://localhost:8000/docs` | `8000` |
-| Health | `http://localhost:8000/health` | `8000` |
-| PostgreSQL | `localhost:5433` | `5432` |
-
-Compose ya levanta FastAPI; no ejecutes además `uvicorn` en el puerto 8000.
-
-Si esos puertos están ocupados, cambia `.env` sin editar Compose:
-
-```env
-BACKEND_PORT=18000
-POSTGRES_PORT=15433
-```
-
-En ese caso, el healthcheck queda en `http://localhost:18000/health`. Si el
-frontend apunta directamente al backend, actualiza también `VITE_API_URL`.
-
-## Desarrollo local de FastAPI
-
-Levanta solamente PostgreSQL y ejecuta la API en el host:
-
-```bash
-docker compose -f docker/docker-compose.yml up -d postgres
-python -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
-
-La configuración Python usa por defecto PostgreSQL en `localhost:5433`. Si
-cambias `POSTGRES_PORT`, define una `DATABASE_URL` equivalente para Uvicorn.
-
-## Contratos v1
-
-`app/schemas/contracts.py` es la autoridad ejecutable. Incluye:
-
-- `RunEvent` append-only y `RunProjection`.
-- `UISpec` con `reason` obligatorio y diez primitivas autorizadas, incluido
-  `map` declarativo para rutas sin depender de mapas externos.
-- `ActionEvent` sin `eventId` creado por cliente.
-- Envelope WebSocket tipado y los doce mensajes de servidor P0.
-- IDs wire prefijados (`run_`, `wf_`, `step_`, `act_`, etc.).
-
-El runtime conserva UUIDs y step IDs internos; `RunEngine.get_projection()` los
-adapta al contrato wire sin cambiar la persistencia de la arquitectura nueva.
-
-## HTTP del runtime (Rol A)
-
-Estos endpoints no dependen del WebSocket y permiten conducir y recuperar la
-demo por HTTP. Los identificadores devueltos usan el formato wire (`run_<uuid>`).
+### Endpoints
 
 | Método | Ruta | Resultado |
 |---|---|---|
-| `POST` | `/demo/skeleton` | Crea un run en decisión pendiente y publica la `UISpec` mínima para verificar G1. |
-| `POST` | `/runs` | Crea el run v1 del golden path y devuelve su `RunProjection` inicial. |
-| `POST` | `/runs` con `workflowVersionId` | Crea un run contra una versión inmutable específica. |
-| `POST` | `/workflows/{workflowId}/versions` | Crea v(n+1); con `baseVersion`, preserva el flow base y anexa los pasos nuevos. |
-| `POST` | `/demo/advance` | Recibe `{"runId":"run_<uuid>"}`, aplica el siguiente evento guionizado y devuelve la proyección. |
-| `POST` | `/demo/moment/{1|2|3}` | Crea M1, M2 o M3 como un run separado de la misma operación demo. |
-| `GET` | `/runs/{runId}/projection` | Devuelve el snapshot actual para polling/reconexión. |
-| `GET` | `/runs/{runId}/events` | Devuelve el event log append-only completo como `RunEvent[]`. |
-| `WS` | `/ws/runs/{runId}?token=<DEMO_TOKEN>` | Reproduce la última `UI_UPDATED` y emite las transiciones posteriores. |
+| `POST` | `/studio/generate` | Genera o edita un layout; persiste el turno |
+| `GET` | `/studio/projects` | Lista proyectos (conversaciones), más reciente primero |
+| `GET` | `/studio/projects/{id}` | Historial completo de turnos de un proyecto |
+| `POST` | `/studio/projects/{id}/feedback` | Califica (1–5 + comentario opcional) las generaciones recientes; se pliega en el prompt del siguiente `generate` |
+| `DELETE` | `/studio/projects/{id}` | Borra el proyecto y sus turnos/feedback |
 
-Ejemplo de avance:
+### Reintentos y presupuesto
 
-```bash
-curl -X POST http://localhost:8000/runs
-curl -X POST http://localhost:8000/demo/advance \
-  -H 'content-type: application/json' \
-  -d '{"runId":"run_<uuid-devuelto>"}'
-```
+`max_output_tokens=6000`, timeout configurable por intento
+(`STUDIO_GENERATION_TIMEOUT_SECONDS`, default 25s), hasta 5 reintentos. Si
+todos fallan, responde un layout de "interfaz no disponible" con el error real
+en `reason` — nunca una pantalla en blanco sin explicación.
 
-Tras crear o avanzar un run, el pipeline determinista compone una `UISpec`, la
-persiste dentro del estado del run y emite `UI_UPDATED`. Al conectarse, el WS
-reproduce esa última actualización; el contrato congelado de `/projection`
-sigue devolviendo exclusivamente `RunProjection`.
+## Runtime de agente (heredado)
 
-El socket también recibe `ACTION_SUBMITTED`. El handler contrasta run,
-workflow/state version, decisión pendiente, acción y payload; registra la
-decisión y responde `ACTION_ACCEPTED`, o agrega un evento append-only y devuelve
-`ACTION_REJECTED` con una razón legible. Una acción aceptada publica de inmediato
-la nueva `UI_UPDATED`.
+Sigue implementado y probado, pero **no alcanzable desde el frontend actual**
+(no hay router; `App.tsx` solo renderiza Studio). Útil si retomas ese trabajo
+o necesitas los endpoints directamente por HTTP/WS.
+
+| Método | Ruta | Resultado |
+|---|---|---|
+| `POST` | `/demo/skeleton` | Crea un run en decisión pendiente (walking skeleton) |
+| `POST` | `/runs` | Crea el run v1 del golden path |
+| `POST` | `/runs` con `workflowVersionId` | Crea un run contra una versión específica |
+| `POST` | `/workflows/{workflowId}/versions` | Crea v(n+1); con `baseVersion`, anexa pasos al flow base |
+| `POST` | `/demo/advance` | Avanza el siguiente evento guionizado |
+| `POST` | `/demo/moment/{1|2|3}` | Crea M1/M2/M3 como runs de la misma operación |
+| `GET` | `/runs/{runId}/projection` | Snapshot actual (polling/reconexión) |
+| `GET` | `/runs/{runId}/snapshot` | Último envelope `UI_UPDATED` completo |
+| `GET` | `/runs/{runId}/events` | Event log append-only completo |
+| `POST` | `/runs/{runId}/assist` | Chat de Ari: `reply`, `recommendedActions`, `proposedStep` |
+| `WS` | `/ws/runs/{runId}?token=<DEMO_TOKEN>` | Reproduce la última `UI_UPDATED` y emite transiciones |
+
+`app/schemas/contracts.py` es la autoridad ejecutable de este contrato
+(`RunEvent`, `RunProjection`, `UISpec` con diez primitivas incluido `map`,
+`ActionEvent`, envelope WS tipado, IDs prefijados). El espejo TypeScript vive
+en `Hack-a-ton-front/src/runtime/contracts.ts` — si tocas este archivo,
+actualiza ambos lados en el mismo cambio.
 
 ## Pruebas
 
@@ -259,28 +196,40 @@ la nueva `UI_UPDATED`.
 docker compose -f docker/docker-compose.yml config --quiet
 ```
 
-Con el stack levantado, el smoke reproducible verifica G1 y el golden path de
-cinco pasos hasta `completed`:
+No requiere `pytest` (aunque también funciona si lo instalas). Con el stack
+levantado, los smoke scripts reproducen los flujos del runtime heredado:
 
 ```bash
-.venv/bin/python scripts/smoke_phase2.py \
-  --base-url http://127.0.0.1:8000 \
-  --token "$DEMO_TOKEN"
-.venv/bin/python scripts/smoke_phase3.py \
-  --base-url http://127.0.0.1:8000 \
-  --token "$DEMO_TOKEN"
-.venv/bin/python scripts/smoke_phase4.py \
-  --base-url http://127.0.0.1:8000 \
-  --token "$DEMO_TOKEN"
-.venv/bin/python scripts/smoke_phase5.py \
-  --base-url http://127.0.0.1:8000 \
-  --expected-generator deterministic \
-  --token "$DEMO_TOKEN"
+.venv/bin/python scripts/smoke_phase2.py --base-url http://127.0.0.1:8000 --token "$DEMO_TOKEN"
+.venv/bin/python scripts/smoke_phase3.py --base-url http://127.0.0.1:8000 --token "$DEMO_TOKEN"
+.venv/bin/python scripts/smoke_phase4.py --base-url http://127.0.0.1:8000 --token "$DEMO_TOKEN"
+.venv/bin/python scripts/smoke_phase5.py --base-url http://127.0.0.1:8000 --expected-generator deterministic --token "$DEMO_TOKEN"
 ```
 
-Las pruebas cubren contratos, composer, policy, pipeline, demo driver,
-decisiones por WS, rechazo stale, pasos inventados, revisión humana, event log
-y adaptación a `RunProjection`.
+## Problema conocido: no hay migraciones de esquema
+
+El backend crea tablas con `Base.metadata.create_all()` al arrancar
+(`main.py`, evento `lifespan`). Eso **crea tablas que faltan pero nunca altera
+una tabla que ya existe**. Si agregas una columna a un modelo (por ejemplo,
+`StudioMessageModel.suggestion`), cualquier base de datos que ya tuviera esa
+tabla creada por una versión anterior del modelo se queda desincronizada y
+revienta en producción con `UndefinedColumnError` (500, y sin headers CORS en
+la respuesta — Starlette no le da chance a `CORSMiddleware` de correr en una
+excepción no manejada, así que el navegador lo reporta como error de CORS
+aunque el problema real sea este).
+
+Síntoma: cualquier endpoint que toque la columna nueva responde 500. Se
+soluciona a mano contra la base afectada:
+
+```sql
+ALTER TABLE studio_messages ADD COLUMN IF NOT EXISTS suggestion TEXT;
+```
+
+En Railway: dashboard del servicio Postgres → pestaña "Data"/"Query", o
+`psql "<connection-url>" -c "..."` con el connection string de la pestaña
+"Connect". Esto va a repetirse con cualquier futura columna nueva mientras no
+se adopte una herramienta de migraciones (p. ej. Alembic) — es la mejora
+pendiente más clara del proyecto.
 
 ## Apagado
 
@@ -289,4 +238,4 @@ docker compose -f docker/docker-compose.yml down
 ```
 
 El volumen de PostgreSQL se conserva. Usa `down -v` solo cuando quieras borrar
-deliberadamente todos los datos locales del proyecto.
+deliberadamente todos los datos locales.
