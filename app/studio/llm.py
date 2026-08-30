@@ -19,6 +19,12 @@ from app.schemas.contracts import AlertNode, AlertProps, AssistMessage, PageProp
 from app.synthesis.llm import DEFAULT_MODEL, ResponseRequest, _output_text, _request_response
 from app.synthesis.llm_upgrade import describe_failure
 from app.studio.schema import StudioLLMOutput, StudioPageNode, StudioUISpec
+from app.studio.store import StoredFeedback
+
+
+LOW_RATING_THRESHOLD = 3.0
+"""Average of the 1-5 ``StoredFeedback`` scores below which the model is
+asked to spend more reasoning effort on the next generation."""
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +56,12 @@ def _strict_output_schema() -> dict[str, Any]:
         "strict": True,
         "schema": schema,
     }
+
+
+def _average_score(feedback: list[StoredFeedback]) -> float | None:
+    if not feedback:
+        return None
+    return sum(entry.score for entry in feedback) / len(feedback)
 
 
 def blank_studio_spec(reason: str) -> StudioUISpec:
@@ -108,6 +120,7 @@ class StudioUIGenerator:
         prompt: str,
         history: list[AssistMessage],
         previous_layout: StudioPageNode | None,
+        feedback: list[StoredFeedback],
     ) -> dict[str, Any]:
         input_payload: dict[str, Any] = {
             "prompt": prompt,
@@ -117,23 +130,36 @@ class StudioUIGenerator:
             input_payload["previousLayout"] = previous_layout.model_dump(
                 mode="json", by_alias=True
             )
+        instructions = (
+            "Build a declarative UI layout for the user's free-text request. "
+            "Use only node types and props permitted by the output schema; "
+            "never invent one. Interpret layout instructions (grouping, "
+            "side-by-side, stacked, spacing) using the section node's "
+            "direction/gap/align/justify props. If previousLayout is present, "
+            "treat the newest prompt as an edit/refinement of it — reuse its "
+            "node ids and content where the request doesn't change them — "
+            "using history only for conversational context; otherwise build "
+            "fresh. Keep labels concise and explain your interpretation of "
+            "the request in reason."
+        )
+        average_score = _average_score(feedback)
+        if feedback:
+            input_payload["feedbackHistory"] = [
+                {"score": entry.score, "comment": entry.comment} for entry in feedback
+            ]
+            instructions += (
+                " feedbackHistory holds this project's most recent 1-5 ratings "
+                "(and optional comments) of past generations, oldest first. "
+                "Favor layout choices similar to what earned high scores and "
+                "avoid whatever low-scored comments called out."
+            )
+        effort = "low" if average_score is not None and average_score < LOW_RATING_THRESHOLD else "none"
         return {
             "model": self.model,
             "store": False,
-            "reasoning": {"effort": "none"},
+            "reasoning": {"effort": effort},
             "max_output_tokens": 2400,
-            "instructions": (
-                "Build a declarative UI layout for the user's free-text request. "
-                "Use only node types and props permitted by the output schema; "
-                "never invent one. Interpret layout instructions (grouping, "
-                "side-by-side, stacked, spacing) using the section node's "
-                "direction/gap/align/justify props. If previousLayout is present, "
-                "treat the newest prompt as an edit/refinement of it — reuse its "
-                "node ids and content where the request doesn't change them — "
-                "using history only for conversational context; otherwise build "
-                "fresh. Keep labels concise and explain your interpretation of "
-                "the request in reason."
-            ),
+            "instructions": instructions,
             "input": json.dumps(input_payload, separators=(",", ":")),
             "text": {"format": _strict_output_schema()},
         }
@@ -144,11 +170,12 @@ class StudioUIGenerator:
         *,
         history: list[AssistMessage] | None = None,
         previous_layout: StudioPageNode | None = None,
+        feedback: list[StoredFeedback] | None = None,
     ) -> StudioUISpec:
         if not self.enabled:
             return blank_studio_spec("La generación de UI por prompt está deshabilitada.")
 
-        payload = self._payload(prompt, history or [], previous_layout)
+        payload = self._payload(prompt, history or [], previous_layout, feedback or [])
         last_error: Exception | None = None
         for attempt in range(self.retries + 1):
             try:

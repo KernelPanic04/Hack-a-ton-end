@@ -2,9 +2,13 @@ import json
 import unittest
 from unittest.mock import Mock
 
+from datetime import datetime, timezone
+import uuid
+
 from app.schemas.contracts import AssistMessage
 from app.studio.llm import StudioUIGenerator
 from app.studio.schema import StudioPageNode, StudioUISpec
+from app.studio.store import StoredFeedback
 
 
 def response(payload: dict) -> dict:
@@ -130,6 +134,85 @@ class StudioUIGeneratorTests(unittest.IsolatedAsyncioTestCase):
         sent_input = json.loads(captured["payload"]["input"])
         self.assertEqual(sent_input["history"], [])
         self.assertNotIn("previousLayout", sent_input)
+
+    async def test_feedback_history_reaches_the_provider_payload(self) -> None:
+        captured: dict = {}
+
+        def request_response(payload, api_key, timeout):
+            captured["payload"] = payload
+            return response(VALID_LAYOUT)
+
+        generator = StudioUIGenerator(
+            api_key="test-key", enabled=True, request_response=request_response
+        )
+        feedback = [
+            StoredFeedback(
+                id=uuid.uuid4(), score=2, comment="Muy cargado.", created_at=datetime.now(timezone.utc)
+            ),
+            StoredFeedback(id=uuid.uuid4(), score=5, comment=None, created_at=datetime.now(timezone.utc)),
+        ]
+
+        await generator.generate("ahora ponlos verticales", feedback=feedback)
+
+        sent_input = json.loads(captured["payload"]["input"])
+        self.assertEqual(sent_input["feedbackHistory"], [
+            {"score": 2, "comment": "Muy cargado."},
+            {"score": 5, "comment": None},
+        ])
+
+    async def test_no_feedback_omits_feedback_history_from_the_payload(self) -> None:
+        captured: dict = {}
+
+        def request_response(payload, api_key, timeout):
+            captured["payload"] = payload
+            return response(VALID_LAYOUT)
+
+        generator = StudioUIGenerator(
+            api_key="test-key", enabled=True, request_response=request_response
+        )
+
+        await generator.generate("crea dos botones")
+
+        sent_input = json.loads(captured["payload"]["input"])
+        self.assertNotIn("feedbackHistory", sent_input)
+
+    async def test_low_average_feedback_score_escalates_reasoning_effort(self) -> None:
+        captured: dict = {}
+
+        def request_response(payload, api_key, timeout):
+            captured["payload"] = payload
+            return response(VALID_LAYOUT)
+
+        generator = StudioUIGenerator(
+            api_key="test-key", enabled=True, request_response=request_response
+        )
+        low_feedback = [
+            StoredFeedback(id=uuid.uuid4(), score=1, comment=None, created_at=datetime.now(timezone.utc)),
+            StoredFeedback(id=uuid.uuid4(), score=2, comment=None, created_at=datetime.now(timezone.utc)),
+        ]
+
+        await generator.generate("crea dos botones", feedback=low_feedback)
+
+        self.assertEqual(captured["payload"]["reasoning"]["effort"], "low")
+
+    async def test_high_average_feedback_score_keeps_reasoning_effort_at_none(self) -> None:
+        captured: dict = {}
+
+        def request_response(payload, api_key, timeout):
+            captured["payload"] = payload
+            return response(VALID_LAYOUT)
+
+        generator = StudioUIGenerator(
+            api_key="test-key", enabled=True, request_response=request_response
+        )
+        high_feedback = [
+            StoredFeedback(id=uuid.uuid4(), score=4, comment=None, created_at=datetime.now(timezone.utc)),
+            StoredFeedback(id=uuid.uuid4(), score=5, comment=None, created_at=datetime.now(timezone.utc)),
+        ]
+
+        await generator.generate("crea dos botones", feedback=high_feedback)
+
+        self.assertEqual(captured["payload"]["reasoning"]["effort"], "none")
 
     async def test_no_run_or_workflow_metadata_is_required(self) -> None:
         generator = StudioUIGenerator(

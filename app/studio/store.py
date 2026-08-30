@@ -17,12 +17,17 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.studio import StudioConversationModel, StudioMessageModel
+from app.models.studio import (
+    StudioConversationFeedbackModel,
+    StudioConversationModel,
+    StudioMessageModel,
+)
 from app.schemas.contracts import AssistMessage
 from app.studio.schema import StudioPageNode
 
 
 DEFAULT_HISTORY_LIMIT = 20
+DEFAULT_FEEDBACK_LIMIT = 10
 
 
 @dataclass(frozen=True)
@@ -40,6 +45,14 @@ class StoredConversation:
     name: str
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class StoredFeedback:
+    id: uuid.UUID
+    score: int
+    comment: str | None
+    created_at: datetime
 
 
 def _to_history(rows: list[StoredMessage]) -> list[AssistMessage]:
@@ -159,3 +172,30 @@ class StudioConversationStore:
         if not stale_ids:
             return
         await self.session.execute(delete(StudioMessageModel).where(StudioMessageModel.id.in_(stale_ids)))
+
+    async def record_feedback(
+        self, conversation_id: uuid.UUID, score: int, comment: str | None = None
+    ) -> None:
+        self.session.add(
+            StudioConversationFeedbackModel(
+                conversation_id=conversation_id, score=score, comment=comment
+            )
+        )
+        await self.session.flush()
+
+    async def get_recent_feedback(
+        self, conversation_id: uuid.UUID, *, limit: int = DEFAULT_FEEDBACK_LIMIT
+    ) -> list[StoredFeedback]:
+        """Oldest-first, capped at the most recent ``limit`` ratings."""
+
+        result = await self.session.execute(
+            select(StudioConversationFeedbackModel)
+            .where(StudioConversationFeedbackModel.conversation_id == conversation_id)
+            .order_by(StudioConversationFeedbackModel.created_at.desc())
+            .limit(limit)
+        )
+        rows = result.scalars().all()
+        return [
+            StoredFeedback(id=row.id, score=row.score, comment=row.comment, created_at=row.created_at)
+            for row in reversed(rows)
+        ]

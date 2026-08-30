@@ -27,6 +27,27 @@ class StudioConversationModel(Base):
     )
 
 
+class StudioConversationFeedbackModel(Base):
+    """A user rating of how well recent Studio generations served them.
+
+    Scoped to the project (``conversation_id``), not a single message: the
+    LLM composer folds recent ratings back into its own prompt as
+    conversation-level guidance (see ``app.studio.llm``), so per-turn
+    attribution isn't needed."""
+
+    __tablename__ = "studio_conversation_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("studio_conversations.id"), nullable=False
+    )
+    score: Mapped[int] = mapped_column(nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class StudioMessageModel(Base):
     """One turn of a Studio conversation.
 

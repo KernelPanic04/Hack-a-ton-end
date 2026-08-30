@@ -33,7 +33,11 @@ from app.ws import RunWebSocketHub
 # Importante: cargar los modelos antes de crear tablas.
 from app.models.workflow import WorkflowDefinitionModel, WorkflowVersionModel  # noqa: F401
 from app.models.run import RunModel, RunEventModel, HumanDecisionModel  # noqa: F401
-from app.models.studio import StudioConversationModel, StudioMessageModel  # noqa: F401
+from app.models.studio import (  # noqa: F401
+    StudioConversationFeedbackModel,
+    StudioConversationModel,
+    StudioMessageModel,
+)
 
 # Orígenes permitidos para llamadas desde el frontend (CORS).
 #
@@ -155,6 +159,20 @@ class StudioProjectMessage(BaseModel):
 
 class StudioProjectDetail(StudioProjectSummary):
     messages: list[StudioProjectMessage]
+
+
+class StudioFeedbackRequest(BaseModel):
+    """A rating of how well a project's recent generations served the user.
+
+    Scoped to the whole project, not a single message (see
+    ``StudioConversationFeedbackModel``): the next ``/studio/generate`` call
+    on this ``conversationId`` folds recent ratings back into the LLM prompt.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+
+    score: int = Field(ge=1, le=5)
+    comment: str | None = Field(default=None, max_length=500)
 
 
 class WorkflowVersionResponse(BaseModel):
@@ -365,9 +383,10 @@ async def generate_studio_ui(
 
     history = await store.get_history(conversation_id)
     previous_layout = await store.get_last_layout(conversation_id)
+    feedback = await store.get_recent_feedback(conversation_id)
 
     spec = await StudioUIGenerator().generate(
-        request.prompt, history=history, previous_layout=previous_layout
+        request.prompt, history=history, previous_layout=previous_layout, feedback=feedback
     )
 
     await store.append_message(conversation_id, "user", request.prompt)
@@ -430,6 +449,29 @@ async def get_studio_project(project_id: str, session: AsyncSession = Depends(ge
             for message in messages
         ],
     )
+
+
+@app.post(
+    "/studio/projects/{project_id}/feedback",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Studio"],
+)
+async def submit_studio_feedback(
+    project_id: str, request: StudioFeedbackRequest, session: AsyncSession = Depends(get_db)
+) -> None:
+    """Rate how well this project's recent generations served the user.
+
+    Scoped to the project as a whole: the next ``/studio/generate`` call on
+    this ``conversationId`` folds the most recent ratings back into the LLM
+    prompt (see ``StudioUIGenerator``), it does not target one message.
+    """
+    store = StudioConversationStore(session)
+    conversation_id = _uuid_with_prefix(project_id, "conv", "projectId")
+    if not await store.conversation_exists(conversation_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proyecto no existe")
+
+    await store.record_feedback(conversation_id, request.score, request.comment)
+    await session.commit()
 
 
 @app.get(
