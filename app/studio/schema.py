@@ -128,7 +128,7 @@ class StudioOrchestration(ContractModel):
 
 class StudioUISpec(ContractModel):
     schema_version: Literal["1"] = SCHEMA_VERSION
-    generated_by: Literal["llm", "fallback"]
+    generated_by: Literal["llm", "fallback", "guidance"]
     reason: str = Field(min_length=1, max_length=500)
     suggestion: str | None = Field(default=None, max_length=300)
     orchestration: StudioOrchestration | None = None

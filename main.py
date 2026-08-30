@@ -398,7 +398,7 @@ async def generate_studio_ui(
         "assistant",
         spec.reason,
         layout=spec.layout if spec.generated_by == "llm" else None,
-        suggestion=spec.suggestion if spec.generated_by == "llm" else None,
+        suggestion=spec.suggestion if spec.generated_by in ("llm", "guidance") else None,
     )
     await store.prune(conversation_id)
     await session.commit()

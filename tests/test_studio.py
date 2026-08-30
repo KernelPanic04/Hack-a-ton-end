@@ -51,6 +51,28 @@ VALID_LAYOUT = {
 }
 
 
+TEXT_ONLY_LAYOUT = {
+    "reason": "Los edificios son estructuras construidas para uso humano.",
+    "layout": {
+        "id": "ui_page",
+        "type": "page",
+        "props": {"title": "Edificios"},
+        "children": [
+            {
+                "id": "ui_heading",
+                "type": "text",
+                "props": {"content": "¿Cómo son los edificios?", "variant": "heading", "emphasis": "normal"},
+            },
+            {
+                "id": "ui_body",
+                "type": "text",
+                "props": {"content": "Suelen ser estructuras de vidrio, piedra o ladrillo.", "variant": "body", "emphasis": "normal"},
+            },
+        ],
+    },
+}
+
+
 class StudioUIGeneratorTests(unittest.IsolatedAsyncioTestCase):
     async def test_generates_a_row_layout_with_two_buttons(self) -> None:
         generator = StudioUIGenerator(
@@ -67,6 +89,61 @@ class StudioUIGeneratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(section.props.direction, "row")
         self.assertEqual([child.type for child in section.children], ["button", "button"])
         StudioUISpec.model_validate(spec.model_dump(mode="json"))
+
+    async def test_text_only_answer_is_redirected_to_guidance(self) -> None:
+        # A knowledge question ("¿cómo son los edificios?") yields prose, not UI.
+        generator = StudioUIGenerator(
+            api_key="test-key",
+            enabled=True,
+            request_response=lambda *_args: response(TEXT_ONLY_LAYOUT),
+        )
+
+        spec = await generator.generate("¿Cómo son los edificios?")
+
+        self.assertEqual(spec.generated_by, "guidance")
+        self.assertIsNotNone(spec.suggestion)
+        self.assertEqual(spec.layout.children[0].type, "alert")
+        # Still a valid, unique-id spec that the frontend can render.
+        StudioUISpec.model_validate(spec.model_dump(mode="json"))
+
+    async def test_a_layout_with_controls_stays_a_design(self) -> None:
+        generator = StudioUIGenerator(
+            api_key="test-key",
+            enabled=True,
+            request_response=lambda *_args: response(VALID_LAYOUT),
+        )
+
+        spec = await generator.generate("crea dos botones")
+
+        self.assertEqual(spec.generated_by, "llm")
+
+    async def test_prose_wrapped_in_a_section_is_still_guidance(self) -> None:
+        wrapped = {
+            "reason": "Explicación de los edificios.",
+            "layout": {
+                "id": "ui_page",
+                "type": "page",
+                "props": {"title": "Edificios"},
+                "children": [{
+                    "id": "ui_section",
+                    "type": "section",
+                    "props": {"direction": "column", "gap": "md", "align": "stretch",
+                              "justify": "start", "columns": 1, "emphasis": "normal"},
+                    "children": [{
+                        "id": "ui_text",
+                        "type": "text",
+                        "props": {"content": "Son estructuras construidas.", "variant": "body", "emphasis": "normal"},
+                    }],
+                }],
+            },
+        }
+        generator = StudioUIGenerator(
+            api_key="test-key", enabled=True, request_response=lambda *_args: response(wrapped)
+        )
+
+        spec = await generator.generate("háblame de los edificios")
+
+        self.assertEqual(spec.generated_by, "guidance")
 
     async def test_suggestion_from_the_model_reaches_the_spec(self) -> None:
         payload = {**VALID_LAYOUT, "suggestion": "Suele leerse mejor si van en horizontal."}

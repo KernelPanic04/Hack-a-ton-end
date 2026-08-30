@@ -23,6 +23,8 @@ from app.studio.schema import (
     StudioOrchestration,
     StudioPageNode,
     StudioUISpec,
+    TextNode,
+    TextProps,
 )
 from app.studio.store import StoredFeedback
 
@@ -123,6 +125,76 @@ def blank_studio_spec(
                         emphasis="warning",
                     ),
                 )
+            ],
+        ),
+    )
+
+
+# Node types that make a layout an actual interface rather than prose. A
+# general question ("¿cómo son los edificios?") comes back as a page of text
+# nodes with no controls — that absence is the signal it is not a design.
+UI_NODE_TYPES = frozenset(
+    {"button", "metric", "alert", "timeline", "keyValue", "compare", "step", "map"}
+)
+
+
+def _carries_ui(node: Any) -> bool:
+    if getattr(node, "type", None) in UI_NODE_TYPES:
+        return True
+    for child in getattr(node, "children", None) or []:
+        if _carries_ui(child):
+            return True
+    return False
+
+
+def guidance_studio_spec(orchestration: StudioOrchestration | None = None) -> StudioUISpec:
+    """Response for a prompt that reads as a question, not a UI request.
+
+    The model still emits a (text-only) layout because the schema requires one;
+    rather than present prose as a "design", the request is turned around with
+    an actionable example of how to ask for an interface instead.
+    """
+
+    return StudioUISpec(
+        generated_by="guidance",
+        reason=(
+            "Esto parece una pregunta general, no una petición de interfaz. "
+            "Studio construye UIs (botones, tarjetas, secciones…) a partir de "
+            "tu descripción."
+        ),
+        suggestion=(
+            "Reformúlalo como una interfaz. Por ejemplo: “crea una tarjeta con "
+            "un título, una imagen y tres puntos clave que expliquen el tema”."
+        ),
+        orchestration=orchestration,
+        layout=StudioPageNode(
+            id="ui_page",
+            type="page",
+            props=PageProps(title="Pídelo como una interfaz"),
+            children=[
+                AlertNode(
+                    id="ui_guidance",
+                    type="alert",
+                    props=AlertProps(
+                        title="Esto parece una pregunta, no una interfaz",
+                        message=(
+                            "Studio genera interfaces, no respuestas de texto. "
+                            "Describe la UI que quieres y la construyo."
+                        ),
+                        emphasis="warning",
+                    ),
+                ),
+                TextNode(
+                    id="ui_guidance_example",
+                    type="text",
+                    props=TextProps(
+                        content=(
+                            "Ejemplo: “crea una tarjeta con título, imagen y tres "
+                            "puntos clave sobre los edificios”."
+                        ),
+                        variant="caption",
+                    ),
+                ),
             ],
         ),
     )
@@ -263,6 +335,8 @@ class StudioUIGenerator:
                     timeout=self.timeout_seconds,
                 )
                 output = StudioLLMOutput.model_validate_json(_output_text(response))
+                if not _carries_ui(output.layout):
+                    return guidance_studio_spec(orchestration)
                 return StudioUISpec(
                     generated_by="llm",
                     reason=output.reason,
