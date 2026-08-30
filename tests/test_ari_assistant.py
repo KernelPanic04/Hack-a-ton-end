@@ -31,6 +31,9 @@ class AriAssistantTests(unittest.IsolatedAsyncioTestCase):
     async def test_accepts_only_available_recommendations(self) -> None:
         def provider(payload, key, timeout):
             self.assertEqual(payload["text"]["format"]["type"], "json_schema")
+            schema_properties = payload["text"]["format"]["schema"]["properties"]
+            self.assertNotIn("runId", schema_properties)
+            self.assertNotIn("schemaVersion", schema_properties)
             context = json.loads(payload["input"])
             self.assertEqual(context["availableActionIds"], ["act_find_alternative"])
             self.assertEqual(context["projection"]["status"], "paused")
@@ -42,6 +45,8 @@ class AriAssistantTests(unittest.IsolatedAsyncioTestCase):
             "What should we do?",
         )
         self.assertEqual(result.recommended_actions[0].action_id, "act_find_alternative")
+        self.assertEqual(result.run_id, "run_assist_test")
+        self.assertEqual(result.schema_version, "1")
 
     async def test_invalid_recommendation_falls_back_without_actions(self) -> None:
         def provider(*_):
@@ -53,9 +58,11 @@ class AriAssistantTests(unittest.IsolatedAsyncioTestCase):
             "What should we do?",
         )
         self.assertEqual(result.recommended_actions, [])
+        self.assertEqual(result.run_id, "run_assist_test")
 
     async def test_disabled_assistant_returns_deterministic_reply(self) -> None:
         assistant = AriAssistant(api_key="test-key", enabled=False)
         result = await self._respond(assistant, "Status?")
         self.assertEqual(result.recommended_actions, [])
         self.assertIn("waiting", result.reply)
+        self.assertEqual(result.run_id, "run_assist_test")

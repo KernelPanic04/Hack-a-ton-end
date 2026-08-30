@@ -8,15 +8,38 @@ import logging
 import os
 from typing import Any
 
-from app.schemas.contracts import AssistRequest, AssistResponse, RunEvent, RunProjection
+from pydantic import Field
+
+from app.flow.models import StepDefinition
+from app.schemas.contracts import (
+    AssistRecommendedAction,
+    AssistRequest,
+    AssistResponse,
+    ContractModel,
+    RunEvent,
+    RunProjection,
+)
 from app.synthesis.llm import DEFAULT_MODEL, ResponseRequest, _output_text, _request_response
 
 
 logger = logging.getLogger(__name__)
 
 
+class AssistantLLMResult(ContractModel):
+    """Only the advisory content the provider is allowed to generate.
+
+    The public response's run metadata is assembled from the trusted
+    projection after validation, exactly as UISpec upgrades retain their
+    backend-owned metadata.
+    """
+
+    reply: str = Field(min_length=1, max_length=2_000)
+    recommended_actions: list[AssistRecommendedAction] = Field(default_factory=list, max_length=4)
+    proposed_step: StepDefinition | None = None
+
+
 def _strict_schema() -> dict[str, Any]:
-    schema = AssistResponse.model_json_schema(by_alias=True)
+    schema = AssistantLLMResult.model_json_schema(by_alias=True)
 
     def normalize(value: Any) -> None:
         if isinstance(value, dict):
@@ -96,13 +119,32 @@ class AriAssistant:
         }
 
     @staticmethod
-    def _fallback(projection: RunProjection) -> AssistResponse:
+    def _response(
+        projection: RunProjection,
+        result: AssistantLLMResult,
+    ) -> AssistResponse:
+        """Attach metadata which the model is never allowed to supply."""
+        return AssistResponse(
+            run_id=projection.run_id,
+            reply=result.reply,
+            recommended_actions=result.recommended_actions,
+            proposed_step=result.proposed_step,
+        )
+
+    @classmethod
+    def _fallback(cls, projection: RunProjection) -> AssistResponse:
         step = projection.current_step.title if projection.current_step else "the run"
         if projection.pending_decision is not None:
-            return AssistResponse(
-                reply=f"{step} is waiting for a human decision. Use the available actions to continue.",
+            return cls._response(
+                projection,
+                AssistantLLMResult(
+                    reply=f"{step} is waiting for a human decision. Use the available actions to continue."
+                ),
             )
-        return AssistResponse(reply=f"{step} is currently {projection.status}.")
+        return cls._response(
+            projection,
+            AssistantLLMResult(reply=f"{step} is currently {projection.status}."),
+        )
 
     async def respond(
         self, projection: RunProjection, events: list[RunEvent], request: AssistRequest
@@ -119,12 +161,12 @@ class AriAssistant:
                     ),
                     timeout=self.timeout_seconds,
                 )
-                result = AssistResponse.model_validate_json(_output_text(response))
+                result = AssistantLLMResult.model_validate_json(_output_text(response))
                 allowed = {action.action_id for action in projection.available_actions}
                 invalid = {item.action_id for item in result.recommended_actions}.difference(allowed)
                 if invalid:
                     raise ValueError("assistant recommended an unavailable action")
-                return result
+                return self._response(projection, result)
             except Exception as exc:
                 if attempt >= self.retries:
                     logger.warning("Ari assistant failed; deterministic reply returned: %s", type(exc).__name__)
