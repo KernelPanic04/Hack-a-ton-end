@@ -81,14 +81,18 @@ class LLMComposer:
         *,
         api_key: str | None = None,
         model: str | None = None,
-        timeout_seconds: float = 5.0,
+        timeout_seconds: float | None = None,
         retries: int = 1,
         enabled: bool | None = None,
         request_response: ResponseRequest = _request_response,
     ) -> None:
         self.api_key = api_key if api_key is not None else os.getenv("OPENAI_API_KEY", "")
         self.model = model or os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else float(os.getenv("LLM_UPGRADE_TIMEOUT_SECONDS", "12"))
+        )
         self.retries = retries
         self.request_response = request_response
         configured_enabled = (
