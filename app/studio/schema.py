@@ -18,6 +18,7 @@ from app.schemas.contracts import (
     AlertNode,
     CompareNode,
     ContractModel,
+    DisplayValue,
     Emphasis,
     KeyValueNode,
     MapNode,
@@ -55,6 +56,110 @@ class TextNode(ContractModel):
     props: TextProps
 
 
+class SearchBarProps(ContractModel):
+    label: str | None = Field(default=None, max_length=80)
+    placeholder: str = Field(default="Buscar…", max_length=100)
+    value: str | None = Field(default=None, max_length=200)
+
+
+class SearchBarNode(ContractModel):
+    id: UINodeId
+    type: Literal["searchBar"]
+    props: SearchBarProps
+
+
+class DropdownOption(ContractModel):
+    label: str = Field(min_length=1, max_length=80)
+    value: str = Field(min_length=1, max_length=80)
+
+
+class DropdownProps(ContractModel):
+    label: str | None = Field(default=None, max_length=80)
+    placeholder: str | None = Field(default=None, max_length=100)
+    options: list[DropdownOption] = Field(min_length=1, max_length=30)
+    selected_value: str | None = Field(default=None, max_length=80)
+
+    @model_validator(mode="after")
+    def validate_selected_value(self) -> DropdownProps:
+        if self.selected_value is not None:
+            known = {option.value for option in self.options}
+            if self.selected_value not in known:
+                raise ValueError("dropdown selectedValue must match a declared option value")
+        return self
+
+
+class DropdownNode(ContractModel):
+    id: UINodeId
+    type: Literal["dropdown"]
+    props: DropdownProps
+
+
+class ChartPoint(ContractModel):
+    label: str = Field(min_length=1, max_length=40)
+    value: float
+
+
+class ChartProps(ContractModel):
+    title: str | None = Field(default=None, max_length=120)
+    chart_type: Literal["bar", "line", "pie"] = "bar"
+    points: list[ChartPoint] = Field(min_length=1, max_length=20)
+    emphasis: Emphasis = "normal"
+
+
+class ChartNode(ContractModel):
+    id: UINodeId
+    type: Literal["chart"]
+    props: ChartProps
+
+
+class TableProps(ContractModel):
+    title: str | None = Field(default=None, max_length=120)
+    columns: list[str] = Field(min_length=1, max_length=8)
+    rows: list[list[DisplayValue]] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_row_widths(self) -> TableProps:
+        width = len(self.columns)
+        if any(len(row) != width for row in self.rows):
+            raise ValueError("table rows must each match the number of columns")
+        return self
+
+
+class TableNode(ContractModel):
+    id: UINodeId
+    type: Literal["table"]
+    props: TableProps
+
+
+class ProgressProps(ContractModel):
+    label: str = Field(min_length=1, max_length=80)
+    value: float = Field(ge=0, le=100)
+    supporting_text: str | None = Field(default=None, max_length=160)
+    emphasis: Emphasis = "normal"
+
+
+class ProgressNode(ContractModel):
+    id: UINodeId
+    type: Literal["progress"]
+    props: ProgressProps
+
+
+class TagItem(ContractModel):
+    label: str = Field(min_length=1, max_length=40)
+    tone: Emphasis = "normal"
+
+
+class TagsProps(ContractModel):
+    title: str | None = Field(default=None, max_length=120)
+    items: list[TagItem] = Field(min_length=1, max_length=20)
+
+
+class TagsNode(ContractModel):
+    id: UINodeId
+    type: Literal["tags"]
+    props: TagsProps
+
+
 class StudioSectionProps(SectionProps):
     """``SectionProps`` plus the layout controls prompts actually ask for."""
 
@@ -89,7 +194,13 @@ StudioUINode: TypeAlias = Annotated[
     | StepNode
     | MapNode
     | ButtonNode
-    | TextNode,
+    | TextNode
+    | SearchBarNode
+    | DropdownNode
+    | ChartNode
+    | TableNode
+    | ProgressNode
+    | TagsNode,
     Field(discriminator="type"),
 ]
 

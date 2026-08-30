@@ -51,6 +51,61 @@ VALID_LAYOUT = {
 }
 
 
+RICH_WIDGETS_LAYOUT = {
+    "reason": "Panel de ventas con búsqueda, filtro, gráfico, tabla, progreso y etiquetas.",
+    "layout": {
+        "id": "ui_page",
+        "type": "page",
+        "props": {"title": "Ventas"},
+        "children": [
+            {
+                "id": "ui_search",
+                "type": "searchBar",
+                "props": {"label": "Buscar", "placeholder": "Producto…"},
+            },
+            {
+                "id": "ui_dropdown",
+                "type": "dropdown",
+                "props": {
+                    "label": "Región",
+                    "options": [{"label": "Norte", "value": "norte"}, {"label": "Sur", "value": "sur"}],
+                    "selectedValue": "norte",
+                },
+            },
+            {
+                "id": "ui_chart",
+                "type": "chart",
+                "props": {
+                    "title": "Ventas mensuales",
+                    "chartType": "bar",
+                    "points": [{"label": "Ene", "value": 10}, {"label": "Feb", "value": 14}],
+                    "emphasis": "normal",
+                },
+            },
+            {
+                "id": "ui_table",
+                "type": "table",
+                "props": {
+                    "title": "Pedidos",
+                    "columns": ["ID", "Estado"],
+                    "rows": [["1", "ok"], ["2", "pendiente"]],
+                },
+            },
+            {
+                "id": "ui_progress",
+                "type": "progress",
+                "props": {"label": "Meta trimestral", "value": 62, "emphasis": "normal"},
+            },
+            {
+                "id": "ui_tags",
+                "type": "tags",
+                "props": {"items": [{"label": "nuevo", "tone": "normal"}, {"label": "urgente", "tone": "critical"}]},
+            },
+        ],
+    },
+}
+
+
 TEXT_ONLY_LAYOUT = {
     "reason": "Los edificios son estructuras construidas para uso humano.",
     "layout": {
@@ -88,6 +143,22 @@ class StudioUIGeneratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(section.type, "section")
         self.assertEqual(section.props.direction, "row")
         self.assertEqual([child.type for child in section.children], ["button", "button"])
+        StudioUISpec.model_validate(spec.model_dump(mode="json"))
+
+    async def test_generates_the_rich_widget_types(self) -> None:
+        generator = StudioUIGenerator(
+            api_key="test-key",
+            enabled=True,
+            request_response=lambda *_args: response(RICH_WIDGETS_LAYOUT),
+        )
+
+        spec = await generator.generate("panel de ventas con búsqueda, filtro y un gráfico")
+
+        self.assertEqual(spec.generated_by, "llm")
+        self.assertEqual(
+            [child.type for child in spec.layout.children],
+            ["searchBar", "dropdown", "chart", "table", "progress", "tags"],
+        )
         StudioUISpec.model_validate(spec.model_dump(mode="json"))
 
     async def test_text_only_answer_is_redirected_to_guidance(self) -> None:

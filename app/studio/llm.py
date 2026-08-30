@@ -134,7 +134,22 @@ def blank_studio_spec(
 # general question ("¿cómo son los edificios?") comes back as a page of text
 # nodes with no controls — that absence is the signal it is not a design.
 UI_NODE_TYPES = frozenset(
-    {"button", "metric", "alert", "timeline", "keyValue", "compare", "step", "map"}
+    {
+        "button",
+        "metric",
+        "alert",
+        "timeline",
+        "keyValue",
+        "compare",
+        "step",
+        "map",
+        "searchBar",
+        "dropdown",
+        "chart",
+        "table",
+        "progress",
+        "tags",
+    }
 )
 
 
@@ -259,7 +274,13 @@ class StudioUIGenerator:
             "side by side), set suggestion to one short, actionable tip "
             "about that — talk to the user, not about the JSON you produced. "
             "Leave suggestion null when the request has no such improvement "
-            "to point out; do not restate reason there."
+            "to point out; do not restate reason there. Beyond basic cards "
+            "and text, use searchBar for a search input, dropdown for a "
+            "single-select control, table for tabular data, progress for a "
+            "single 0-100 meter, tags for a list of short labels/badges, and "
+            "chart (bar, line or pie) for any numeric series or comparison "
+            "the prompt describes — prefer chart over a wall of metric "
+            "nodes when the request is really asking to visualize data."
         )
         average_score = _average_score(feedback)
         if feedback:
