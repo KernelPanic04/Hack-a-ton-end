@@ -1,5 +1,8 @@
 """Frozen v1 contracts shared by the run engine, UI synthesis, and frontend.
 
+Addendum v1.1 (signed by Lane D, see DECISION_LOG.md): map node #10 and the
+HTTP-only assistant contract (AssistRequest/AssistResponse).
+
 Pydantic is the executable authority. The TypeScript mirror lives at
 ``Hack-a-ton-front/src/runtime/contracts.ts``. Update both, the Phase 0 docs,
 and the decision log in the same change.
@@ -19,6 +22,8 @@ from pydantic import (
     model_validator,
 )
 from pydantic.alias_generators import to_camel
+
+from app.flow.models import StepDefinition
 
 
 SCHEMA_VERSION = "1"
@@ -272,6 +277,54 @@ class StepProps(ContractModel):
     emphasis: Emphasis = "normal"
 
 
+class MapWaypoint(ContractModel):
+    id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.-]+$")
+    label: str = Field(min_length=1, max_length=100)
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    kind: Literal["origin", "stop", "destination"]
+
+
+class MapMarker(ContractModel):
+    label: str | None = Field(default=None, max_length=100)
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+
+
+class MapSegment(ContractModel):
+    from_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.-]+$")
+    to_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.-]+$")
+    status: Literal["planned", "active", "diverted"]
+
+
+class MapProps(ContractModel):
+    """Addendum v1.1 (node #10): a generic geographic route, domain-neutral.
+
+    Waypoints/segments/marker carry no domain naming on purpose: the composer
+    emits this node from the shape of step data (coordinates present), never
+    from step names.
+    """
+
+    title: str | None = Field(default=None, max_length=120)
+    waypoints: list[MapWaypoint] = Field(min_length=2)
+    segments: list[MapSegment] = Field(min_length=1)
+    marker: MapMarker | None = None
+    emphasis: Emphasis = "normal"
+
+    @model_validator(mode="after")
+    def validate_map(self) -> MapProps:
+        waypoint_ids = [waypoint.id for waypoint in self.waypoints]
+        if len(waypoint_ids) != len(set(waypoint_ids)):
+            raise ValueError("map waypoints must contain unique id values")
+        known = set(waypoint_ids)
+        for segment in self.segments:
+            if segment.from_id not in known or segment.to_id not in known:
+                raise ValueError("map segments must reference declared waypoint ids")
+            if segment.from_id == segment.to_id:
+                raise ValueError("map segments cannot start and end at the same waypoint")
+        return self
+
+
 class PageNode(ContractModel):
     id: UINodeId
     type: Literal["page"]
@@ -328,6 +381,12 @@ class StepNode(ContractModel):
     props: StepProps
 
 
+class MapNode(ContractModel):
+    id: UINodeId
+    type: Literal["map"]
+    props: MapProps
+
+
 UINode: TypeAlias = Annotated[
     PageNode
     | SectionNode
@@ -337,7 +396,8 @@ UINode: TypeAlias = Annotated[
     | KeyValueNode
     | CompareNode
     | DecisionPanelNode
-    | StepNode,
+    | StepNode
+    | MapNode,
     Field(discriminator="type"),
 ]
 
@@ -439,6 +499,7 @@ COMPONENT_TYPES = (
     "compare",
     "decisionPanel",
     "step",
+    "map",
 )
 
 
@@ -614,3 +675,55 @@ WebSocketEnvelope: TypeAlias = Annotated[
     | ActionSubmittedEnvelope,
     Field(discriminator="type"),
 ]
+
+
+class AssistMessage(ContractModel):
+    """One prior turn of the assistant conversation, resent for context."""
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=2000)
+
+
+class AssistRequest(ContractModel):
+    """Wire input of ``POST /runs/{run_id}/assist`` (addendum v1.1).
+
+    Deliberately outside the frozen WebSocket envelope: the assistant is an
+    HTTP sidecar and never publishes runtime state on its own.
+    """
+
+    schema_version: Literal["1"] = SCHEMA_VERSION
+    message: str = Field(min_length=1, max_length=2000)
+    history: list[AssistMessage] = Field(default_factory=list, max_length=20)
+
+
+class AssistRecommendedAction(ContractModel):
+    """A policy-known action the assistant suggests but never executes."""
+
+    action_id: ActionId
+    rationale: str = Field(min_length=1, max_length=300)
+
+
+class AssistResponse(ContractModel):
+    """Wire output of ``POST /runs/{run_id}/assist`` (addendum v1.1).
+
+    ``recommendedActions`` may only carry actionIds present in the run's
+    pending decision (enforced by the endpoint against the projection);
+    execution still travels the normal ACTION_SUBMITTED -> policy path.
+    ``proposedStep`` reuses the runtime-editable ``StepDefinition`` consumed
+    by ``POST /workflows/{workflow_id}/versions``.
+    """
+
+    schema_version: Literal["1"] = SCHEMA_VERSION
+    run_id: RunId
+    reply: str = Field(min_length=1, max_length=2000)
+    recommended_actions: list[AssistRecommendedAction] = Field(
+        default_factory=list, max_length=4
+    )
+    proposed_step: StepDefinition | None = None
+
+    @model_validator(mode="after")
+    def validate_assist_response(self) -> AssistResponse:
+        action_ids = [action.action_id for action in self.recommended_actions]
+        if len(action_ids) != len(set(action_ids)):
+            raise ValueError("recommendedActions must contain unique actionId values")
+        return self
