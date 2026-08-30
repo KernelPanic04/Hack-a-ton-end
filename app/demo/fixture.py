@@ -68,29 +68,68 @@ SCRIPTED_EVENTS: list[dict[str, Any]] = [
     {
         "step_id": "booking_received",
         "data": {
-            "booking_email": "Booking BK-4471 confirmado: 3 contenedores, Muebles del Sur -> Rotterdam.",
+            "booking_email": "Booking BK-4471 confirmado: 3 contenedores para Muebles del Sur.",
+            "booking": {
+                "carrier": "Pacific Meridian Lines",
+                "vessel": "MV Horizonte",
+                "origin": "Cai Mep, Vietnam",
+                "destination": "Manzanillo, Mexico",
+                "etd": "2026-08-20",
+                "eta": "2026-09-15",
+                "containers": ["KPAU-100001", "KPAU-100002", "KPAU-100003"],
+            },
+            "route": {
+                "waypoints": [
+                    {"id": "cai_mep", "label": "Cai Mep", "lat": 10.53, "lon": 107.07, "kind": "origin"},
+                    {"id": "manzanillo", "label": "Manzanillo", "lat": 19.05, "lon": -104.32, "kind": "destination"},
+                ],
+                "segments": [{"from": "cai_mep", "to": "manzanillo", "status": "planned"}],
+                "emphasis": "normal",
+            },
         },
         "verdict": "ok",
     },
     {
         "step_id": "vessel_departure",
         "data": {
-            "vessel_name": "MSC Aurora",
-            "origin_port": "Valparaíso",
+            "vessel_name": "MV Horizonte",
+            "origin_port": "Cai Mep",
             "departure_date": "2026-08-20",
+            "route": {
+                "waypoints": [
+                    {"id": "cai_mep", "label": "Cai Mep", "lat": 10.53, "lon": 107.07, "kind": "origin"},
+                    {"id": "manzanillo", "label": "Manzanillo", "lat": 19.05, "lon": -104.32, "kind": "destination"},
+                ],
+                "marker": {"lat": 13.1, "lon": 117.4, "label": "MV Horizonte"},
+                "segments": [{"from": "cai_mep", "to": "manzanillo", "status": "active"}],
+                "emphasis": "normal",
+            },
         },
         "verdict": "ok",
     },
     {
         "step_id": "transshipment_anomaly",
         "data": {
-            "transshipment_port": "Balboa",
+            "transshipment_port": "Busan",
             "delay_days": 9,
+            "route": {
+                "waypoints": [
+                    {"id": "cai_mep", "label": "Cai Mep", "lat": 10.53, "lon": 107.07, "kind": "origin"},
+                    {"id": "busan", "label": "Busan", "lat": 35.1, "lon": 129.04, "kind": "stop"},
+                    {"id": "manzanillo", "label": "Manzanillo", "lat": 19.05, "lon": -104.32, "kind": "destination"},
+                ],
+                "marker": {"lat": 35.1, "lon": 129.04, "label": "MV Horizonte"},
+                "segments": [
+                    {"from": "cai_mep", "to": "busan", "status": "active"},
+                    {"from": "busan", "to": "manzanillo", "status": "diverted"},
+                ],
+                "emphasis": "warning",
+            },
         },
         "verdict": "attention",
         "pending_decision": {
             "prompt": "El transbordo en Balboa agrega 9 días. ¿Buscar ruta alterna?",
-            "available_actions": ["find_alternative", "accept_delay"],
+            "available_actions": ["find_alternative", "accept_delay", "notify_client"],
         },
     },
     {
@@ -127,5 +166,12 @@ DECISION_OUTCOMES: dict[str, dict[str, dict[str, Any]]] = {
             "verdict": "attention",
         },
         "delivery_eta": {"data": {"final_eta": "2026-09-21"}, "verdict": "ok"},
+    },
+    "notify_client": {
+        "route_resolution": {
+            "data": {"chosen_action": "notify_client", "recovered_days": 0, "client_notified": True},
+            "verdict": "attention",
+        },
+        "delivery_eta": {"data": {"final_eta": "2026-09-24", "client_notified": True}, "verdict": "ok"},
     },
 }

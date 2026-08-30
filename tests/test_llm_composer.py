@@ -80,6 +80,34 @@ class LLMComposerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await composer.compose_upgrade(current, baseline))
         request_response.assert_not_called()
 
+    async def test_llm_cannot_remove_or_change_a_trusted_map(self) -> None:
+        current = projection()
+        current.operation["route"] = {
+            "waypoints": [
+                {"id": "a", "label": "A", "lat": 1, "lon": 2, "kind": "origin"},
+                {"id": "b", "label": "B", "lat": 3, "lon": 4, "kind": "destination"},
+            ],
+            "segments": [{"from": "a", "to": "b", "status": "planned"}],
+        }
+        baseline = DeterministicComposer().compose(current)
+        layout = baseline.layout.model_dump(mode="json", by_alias=True)
+
+        def remove_maps(node):
+            children = node.get("children", [])
+            node["children"] = [child for child in children if child["type"] != "map"]
+            for child in node["children"]:
+                remove_maps(child)
+
+        remove_maps(layout)
+
+        def request_response(*_args):
+            return {"output": [{"content": [{"type": "output_text", "text": __import__("json").dumps({
+                "reason": "Attempted simplification.", "layout": layout
+            })}]}]}
+
+        composer = LLMComposer(api_key="test-key", enabled=True, request_response=request_response)
+        self.assertIsNone(await composer.compose_upgrade(current, baseline))
+
 
 if __name__ == "__main__":
     unittest.main()

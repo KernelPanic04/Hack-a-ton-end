@@ -52,6 +52,7 @@ def _id(prefix: str) -> Field:
 WorkflowId: TypeAlias = Annotated[str, _id("wf")]
 StepId: TypeAlias = Annotated[str, _id("step")]
 RunId: TypeAlias = Annotated[str, _id("run")]
+OperationId: TypeAlias = Annotated[str, _id("op")]
 DecisionId: TypeAlias = Annotated[str, _id("dec")]
 ActionId: TypeAlias = Annotated[str, _id("act")]
 EventId: TypeAlias = Annotated[str, _id("evt")]
@@ -136,6 +137,7 @@ class RunEvent(ContractModel):
 class RunProjection(ContractModel):
     schema_version: Literal["1"] = SCHEMA_VERSION
     run_id: RunId
+    operation_id: OperationId | None = None
     workflow_id: WorkflowId
     workflow_version: int = Field(ge=1)
     state_version: int = Field(ge=0)

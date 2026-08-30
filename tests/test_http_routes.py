@@ -16,6 +16,7 @@ class HttpRoutesTests(unittest.TestCase):
         self.assertIn(("/workflows/{workflow_id}/versions", frozenset({"POST"})), routes)
         self.assertIn(("/demo/skeleton", frozenset({"POST"})), routes)
         self.assertIn(("/demo/advance", frozenset({"POST"})), routes)
+        self.assertIn(("/demo/moment/{moment}", frozenset({"POST"})), routes)
         self.assertIn(("/runs/{run_id}/projection", frozenset({"GET"})), routes)
         self.assertIn(("/runs/{run_id}/assist", frozenset({"POST"})), routes)
         self.assertIn(("/runs/{run_id}/snapshot", frozenset({"GET"})), routes)

@@ -19,6 +19,8 @@ from app.schemas.contracts import (
     KeyValueProps,
     MetricNode,
     MetricProps,
+    MapNode,
+    MapProps,
     PageNode,
     PageProps,
     RunProjection,
@@ -153,6 +155,33 @@ def _comparison(projection: RunProjection) -> CompareNode | None:
     return None
 
 
+def _map(projection: RunProjection) -> MapNode | None:
+    """Render route-shaped data without coupling synthesis to a domain step name."""
+
+    def visit(value: Any) -> dict[str, Any] | None:
+        if isinstance(value, dict):
+            if {"waypoints", "segments"}.issubset(value):
+                return value
+            for child in value.values():
+                found = visit(child)
+                if found is not None:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = visit(child)
+                if found is not None:
+                    return found
+        return None
+
+    route = visit(projection.operation)
+    if route is None:
+        return None
+    try:
+        return MapNode(id="ui_route", type="map", props=MapProps.model_validate(route))
+    except (TypeError, ValueError):
+        return None
+
+
 def _decision_actions(actions: list[ActionDefinition]) -> list[DecisionAction]:
     return [
         DecisionAction(
@@ -196,6 +225,7 @@ def compose(projection: RunProjection) -> UISpec:
     timeline = _timeline(projection)
     context = _context(projection)
     comparison = _comparison(projection)
+    route_map = _map(projection)
     attention = (
         projection.current_step is not None and projection.current_step.status == "attention"
     ) or _contains_attention(projection.operation)
@@ -213,6 +243,7 @@ def compose(projection: RunProjection) -> UISpec:
                 ),
             ),
             _decision_section(projection).children[0],
+            *([route_map] if route_map is not None else []),
             timeline,
         ]
         if context is not None:
@@ -235,7 +266,7 @@ def compose(projection: RunProjection) -> UISpec:
                 id="ui_execution",
                 type="section",
                 props=SectionProps(title="Current activity", emphasis="warning"),
-                children=[node for node in (current, comparison, timeline) if node is not None],
+                children=[node for node in (route_map, current, comparison, timeline) if node is not None],
             ),
         ]
         reason = "An anomaly-level result changes the layout to foreground the alert."
@@ -262,7 +293,7 @@ def compose(projection: RunProjection) -> UISpec:
                 id="ui_execution",
                 type="section",
                 props=SectionProps(title="Activity"),
-                children=[node for node in (timeline, comparison) if node is not None],
+                children=[node for node in (route_map, timeline, comparison) if node is not None],
             ),
         ]
         reason = "A stable run uses a summary-first layout with activity context."

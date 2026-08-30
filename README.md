@@ -205,7 +205,8 @@ cambias `POSTGRES_PORT`, define una `DATABASE_URL` equivalente para Uvicorn.
 `app/schemas/contracts.py` es la autoridad ejecutable. Incluye:
 
 - `RunEvent` append-only y `RunProjection`.
-- `UISpec` con `reason` obligatorio y las nueve primitivas autorizadas.
+- `UISpec` con `reason` obligatorio y diez primitivas autorizadas, incluido
+  `map` declarativo para rutas sin depender de mapas externos.
 - `ActionEvent` sin `eventId` creado por cliente.
 - Envelope WebSocket tipado y los doce mensajes de servidor P0.
 - IDs wire prefijados (`run_`, `wf_`, `step_`, `act_`, etc.).
@@ -225,6 +226,7 @@ demo por HTTP. Los identificadores devueltos usan el formato wire (`run_<uuid>`)
 | `POST` | `/runs` con `workflowVersionId` | Crea un run contra una versión inmutable específica. |
 | `POST` | `/workflows/{workflowId}/versions` | Crea v(n+1); con `baseVersion`, preserva el flow base y anexa los pasos nuevos. |
 | `POST` | `/demo/advance` | Recibe `{"runId":"run_<uuid>"}`, aplica el siguiente evento guionizado y devuelve la proyección. |
+| `POST` | `/demo/moment/{1|2|3}` | Crea M1, M2 o M3 como un run separado de la misma operación demo. |
 | `GET` | `/runs/{runId}/projection` | Devuelve el snapshot actual para polling/reconexión. |
 | `GET` | `/runs/{runId}/events` | Devuelve el event log append-only completo como `RunEvent[]`. |
 | `WS` | `/ws/runs/{runId}?token=<DEMO_TOKEN>` | Reproduce la última `UI_UPDATED` y emite las transiciones posteriores. |
