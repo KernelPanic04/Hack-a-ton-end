@@ -106,6 +106,23 @@ RICH_WIDGETS_LAYOUT = {
 }
 
 
+COLORED_LAYOUT = {
+    "reason": "Fondo azul oscuro y botón naranja, como se pidió.",
+    "layout": {
+        "id": "ui_page",
+        "type": "page",
+        "props": {"title": "Panel", "backgroundColor": "#0b1220"},
+        "children": [
+            {
+                "id": "ui_btn",
+                "type": "button",
+                "props": {"label": "Ir", "variant": "primary", "size": "md", "color": "#ff6600"},
+            },
+        ],
+    },
+}
+
+
 TEXT_ONLY_LAYOUT = {
     "reason": "Los edificios son estructuras construidas para uso humano.",
     "layout": {
@@ -159,7 +176,27 @@ class StudioUIGeneratorTests(unittest.IsolatedAsyncioTestCase):
             [child.type for child in spec.layout.children],
             ["searchBar", "dropdown", "chart", "table", "progress", "tags"],
         )
+
+    async def test_recolors_the_page_background_and_a_button(self) -> None:
+        generator = StudioUIGenerator(
+            api_key="test-key",
+            enabled=True,
+            request_response=lambda *_args: response(COLORED_LAYOUT),
+        )
+
+        spec = await generator.generate("pon el fondo azul oscuro y el botón naranja")
+
+        self.assertEqual(spec.layout.props.background_color, "#0b1220")
+        self.assertEqual(spec.layout.children[0].props.color, "#ff6600")
         StudioUISpec.model_validate(spec.model_dump(mode="json"))
+
+    async def test_rejects_a_non_hex_color(self) -> None:
+        from pydantic import ValidationError
+
+        from app.studio.schema import StudioPageProps
+
+        with self.assertRaises(ValidationError):
+            StudioPageProps(title="x", background_color="blue")
 
     async def test_text_only_answer_is_redirected_to_guidance(self) -> None:
         # A knowledge question ("¿cómo son los edificios?") yields prose, not UI.

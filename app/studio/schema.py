@@ -31,11 +31,17 @@ from app.schemas.contracts import (
     UINodeId,
 )
 
+# A free-form accent color, opt-in on top of the fixed emphasis/variant
+# palette. Hex-only (no CSS keywords, no arbitrary strings) so it drops
+# straight into an inline style without any sanitization step.
+HexColor: TypeAlias = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")]
+
 
 class ButtonProps(ContractModel):
     label: str = Field(min_length=1, max_length=80)
     variant: Literal["primary", "secondary", "ghost", "danger"] = "primary"
     size: Literal["sm", "md", "lg"] = "md"
+    color: HexColor | None = None
 
 
 class ButtonNode(ContractModel):
@@ -48,6 +54,7 @@ class TextProps(ContractModel):
     content: str = Field(min_length=1, max_length=2000)
     variant: Literal["heading", "body", "caption"] = "body"
     emphasis: Emphasis = "normal"
+    color: HexColor | None = None
 
 
 class TextNode(ContractModel):
@@ -97,6 +104,7 @@ class DropdownNode(ContractModel):
 class ChartPoint(ContractModel):
     label: str = Field(min_length=1, max_length=40)
     value: float
+    color: HexColor | None = None
 
 
 class ChartProps(ContractModel):
@@ -136,6 +144,7 @@ class ProgressProps(ContractModel):
     value: float = Field(ge=0, le=100)
     supporting_text: str | None = Field(default=None, max_length=160)
     emphasis: Emphasis = "normal"
+    color: HexColor | None = None
 
 
 class ProgressNode(ContractModel):
@@ -147,6 +156,7 @@ class ProgressNode(ContractModel):
 class TagItem(ContractModel):
     label: str = Field(min_length=1, max_length=40)
     tone: Emphasis = "normal"
+    color: HexColor | None = None
 
 
 class TagsProps(ContractModel):
@@ -167,6 +177,7 @@ class StudioSectionProps(SectionProps):
     gap: Literal["sm", "md", "lg"] = "md"
     align: Literal["start", "center", "end", "stretch"] = "stretch"
     justify: Literal["start", "center", "end", "between"] = "start"
+    background_color: HexColor | None = None
 
 
 class StudioSectionNode(ContractModel):
@@ -176,10 +187,16 @@ class StudioSectionNode(ContractModel):
     children: list[StudioUINode] = Field(default_factory=list)
 
 
+class StudioPageProps(PageProps):
+    """``PageProps`` plus a whole-page background color."""
+
+    background_color: HexColor | None = None
+
+
 class StudioPageNode(ContractModel):
     id: UINodeId
     type: Literal["page"]
-    props: PageProps
+    props: StudioPageProps
     children: list[StudioUINode] = Field(min_length=1)
 
 

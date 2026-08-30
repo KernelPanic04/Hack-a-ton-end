@@ -15,13 +15,14 @@ import logging
 import os
 from typing import Any
 
-from app.schemas.contracts import AlertNode, AlertProps, AssistMessage, PageProps
+from app.schemas.contracts import AlertNode, AlertProps, AssistMessage
 from app.synthesis.llm import DEFAULT_MODEL, ResponseRequest, _output_text, _request_response
 from app.synthesis.llm_upgrade import describe_failure
 from app.studio.schema import (
     StudioLLMOutput,
     StudioOrchestration,
     StudioPageNode,
+    StudioPageProps,
     StudioUISpec,
     TextNode,
     TextProps,
@@ -114,7 +115,7 @@ def blank_studio_spec(
         layout=StudioPageNode(
             id="ui_page",
             type="page",
-            props=PageProps(title="Interfaz no disponible"),
+            props=StudioPageProps(title="Interfaz no disponible"),
             children=[
                 AlertNode(
                     id="ui_blank_fallback",
@@ -185,7 +186,7 @@ def guidance_studio_spec(orchestration: StudioOrchestration | None = None) -> St
         layout=StudioPageNode(
             id="ui_page",
             type="page",
-            props=PageProps(title="Pídelo como una interfaz"),
+            props=StudioPageProps(title="Pídelo como una interfaz"),
             children=[
                 AlertNode(
                     id="ui_guidance",
@@ -280,7 +281,16 @@ class StudioUIGenerator:
             "single 0-100 meter, tags for a list of short labels/badges, and "
             "chart (bar, line or pie) for any numeric series or comparison "
             "the prompt describes — prefer chart over a wall of metric "
-            "nodes when the request is really asking to visualize data."
+            "nodes when the request is really asking to visualize data. "
+            "page, section, button, text, progress, each tags item and each "
+            "chart point accept an optional hex color (e.g. \"#3366ff\", "
+            "backgroundColor on page/section, color elsewhere). Whenever the "
+            "prompt asks to recolor the whole UI, a container, or one "
+            "specific element, set that field to a concrete hex value on "
+            "the exact node(s) it refers to — never describe a color change "
+            "in reason without also setting the color prop that makes it "
+            "real. Leave color null when the request does not mention "
+            "color; do not recolor things it didn't ask about."
         )
         average_score = _average_score(feedback)
         if feedback:
