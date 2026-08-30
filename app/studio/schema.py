@@ -67,6 +67,9 @@ class SearchBarProps(ContractModel):
     label: str | None = Field(default=None, max_length=80)
     placeholder: str = Field(default="Buscar…", max_length=100)
     value: str | None = Field(default=None, max_length=200)
+    # Id of a `table` or `tags` node elsewhere in the same layout: typing here
+    # live-filters that node's rows/items in the browser, client-side only.
+    filter_target: UINodeId | None = None
 
 
 class SearchBarNode(ContractModel):
@@ -85,6 +88,11 @@ class DropdownProps(ContractModel):
     placeholder: str | None = Field(default=None, max_length=100)
     options: list[DropdownOption] = Field(min_length=1, max_length=30)
     selected_value: str | None = Field(default=None, max_length=80)
+    # Same wiring as SearchBarProps.filter_target. filter_column additionally
+    # pins the match to one table column (by header text); omitted, the
+    # selected option matches against any cell instead.
+    filter_target: UINodeId | None = None
+    filter_column: str | None = Field(default=None, max_length=80)
 
     @model_validator(mode="after")
     def validate_selected_value(self) -> DropdownProps:
@@ -263,18 +271,28 @@ class StudioUISpec(ContractModel):
     layout: StudioPageNode
 
     @model_validator(mode="after")
-    def validate_unique_node_ids(self) -> StudioUISpec:
-        node_ids: set[str] = set()
+    def validate_tree_invariants(self) -> StudioUISpec:
+        node_types: dict[str, str] = {}
+        filter_refs: list[tuple[str, str]] = []
 
         def visit(node: StudioUINode, *, root: bool = False) -> None:
-            if node.id in node_ids:
+            if node.id in node_types:
                 raise ValueError("layout must contain unique node ids")
-            node_ids.add(node.id)
+            node_types[node.id] = node.type
             if not root and isinstance(node, StudioPageNode):
                 raise ValueError("page nodes cannot be nested")
             if isinstance(node, (StudioPageNode, StudioSectionNode)):
                 for child in node.children:
                     visit(child)
+            elif isinstance(node, (SearchBarNode, DropdownNode)) and node.props.filter_target:
+                filter_refs.append((node.id, node.props.filter_target))
 
         visit(self.layout, root=True)
+
+        for source_id, target_id in filter_refs:
+            if node_types.get(target_id) not in {"table", "tags"}:
+                raise ValueError(
+                    f"filterTarget on {source_id} must reference an existing table or tags node id"
+                )
+
         return self

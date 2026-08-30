@@ -123,6 +123,37 @@ COLORED_LAYOUT = {
 }
 
 
+FILTER_WIRED_LAYOUT = {
+    "reason": "Buscador y dropdown conectados a la tabla de pedidos.",
+    "layout": {
+        "id": "ui_page",
+        "type": "page",
+        "props": {"title": "Pedidos"},
+        "children": [
+            {
+                "id": "ui_search",
+                "type": "searchBar",
+                "props": {"placeholder": "Buscar…", "filterTarget": "ui_table"},
+            },
+            {
+                "id": "ui_dropdown",
+                "type": "dropdown",
+                "props": {
+                    "options": [{"label": "OK", "value": "ok"}, {"label": "Pendiente", "value": "pendiente"}],
+                    "filterTarget": "ui_table",
+                    "filterColumn": "Estado",
+                },
+            },
+            {
+                "id": "ui_table",
+                "type": "table",
+                "props": {"columns": ["ID", "Estado"], "rows": [["1", "ok"], ["2", "pendiente"]]},
+            },
+        ],
+    },
+}
+
+
 TEXT_ONLY_LAYOUT = {
     "reason": "Los edificios son estructuras construidas para uso humano.",
     "layout": {
@@ -197,6 +228,45 @@ class StudioUIGeneratorTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(ValidationError):
             StudioPageProps(title="x", background_color="blue")
+
+    async def test_wires_a_search_bar_and_dropdown_to_a_table(self) -> None:
+        generator = StudioUIGenerator(
+            api_key="test-key",
+            enabled=True,
+            request_response=lambda *_args: response(FILTER_WIRED_LAYOUT),
+        )
+
+        spec = await generator.generate("agrega un buscador y un filtro de estado a la tabla de pedidos")
+
+        search, dropdown, table = spec.layout.children
+        self.assertEqual(search.props.filter_target, "ui_table")
+        self.assertEqual(dropdown.props.filter_target, "ui_table")
+        self.assertEqual(dropdown.props.filter_column, "Estado")
+        self.assertEqual(table.id, "ui_table")
+        StudioUISpec.model_validate(spec.model_dump(mode="json"))
+
+    async def test_rejects_a_filter_target_that_does_not_exist(self) -> None:
+        from pydantic import ValidationError
+
+        with self.assertRaises(ValidationError):
+            StudioUISpec.model_validate(
+                {
+                    "generatedBy": "llm",
+                    "reason": "x",
+                    "layout": {
+                        "id": "ui_page",
+                        "type": "page",
+                        "props": {"title": "x"},
+                        "children": [
+                            {
+                                "id": "ui_search",
+                                "type": "searchBar",
+                                "props": {"placeholder": "Buscar…", "filterTarget": "ui_missing"},
+                            },
+                        ],
+                    },
+                }
+            )
 
     async def test_text_only_answer_is_redirected_to_guidance(self) -> None:
         # A knowledge question ("¿cómo son los edificios?") yields prose, not UI.
