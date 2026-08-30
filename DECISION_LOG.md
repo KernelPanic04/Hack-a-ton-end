@@ -73,3 +73,11 @@ snapshot).
   Pendiente de A.3 (regla de composición del mapa) para que el composer lo emita.
 - **Alternativas consideradas:** (a) extender el envelope WS con mensajes de chat — descartado, rompería el contrato congelado; (b) llamar a OpenAI desde el front — descartado, expondría la key en el bundle; (c) mapa con tiles externos — descartado, rompe el fallback sin red; se usa SVG inline.
 - **Kill criteria nuevos:** mapa → route card; chat libre → panel solo-recomendaciones; trial desde UI → editor mínimo → video de respaldo.
+
+## 2026-08-30 · A.3 — regla de composición del mapa (map node #10) operativa
+
+- **Problema:** el composer tenía la regla `_map` (emite `map` por forma de datos, no por nombre de paso), pero el fixture y los tests producían segmentos con claves `from`/`to`, mientras el contrato congelado `MapSegment` usa `fromId`/`toId` con `extra="forbid"`. `MapProps.model_validate` fallaba y `_map` devolvía `None` en silencio → el mapa nunca se renderizaba (M1–M3 rotos). Test `test_route_shaped_operation_data_adds_a_map_node` en rojo.
+- **Decisión (firma D):** estandarizar en `fromId`/`toId` (conforma los productores al contrato firmado en A.1; no se toca el contrato Pydantic ni se aliasa la palabra reservada `from`).
+- **Cambios backend:** `demo/fixture.py` (4 segmentos), `tests/test_deterministic_composer.py`, `tests/test_llm_composer.py` → `fromId`/`toId`. Suite: 64 passed, honesty test verde.
+- **Cambios frontend (consistencia de contrato + fin de fork paralelo de phase-4b):** `contracts.ts` `MapSegment`→`fromId`/`toId` y `MapProps.title` agregado (faltaba en el espejo); `validation.ts` chequeo semántico de waypoints→`fromId`/`toId`; `schemaExtensions.ts` `MapSegment`→`fromId`/`toId` + `title`; `registry.ts` dedupe de la entrada `map:` y del import duplicado (artefacto de merge); `runtime.test.tsx` fixtures→`fromId`/`toId`; JSON Schemas regenerados desde el contrato. `RouteMap.tsx` implementado como SVG inline offline (role=img, sin tiles) para satisfacer los tests B.4 ya escritos. Suite front: 27 passed, tsc y oxlint limpios.
+- **Nota:** PR #37 (equipo) ya resolvió el duplicado de contrato del asistente; no se tocó. La versión SVG de `RouteMap` cubre lo que los tests de phase-4b esperaban; el pulido visual pleno sigue siendo B.4 (Rol B).
