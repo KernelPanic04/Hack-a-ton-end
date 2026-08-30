@@ -23,8 +23,10 @@ LAYOUT_B = {
 }
 
 
-def row(role: str, content: str, layout: dict | None = None) -> StoredMessage:
-    return StoredMessage(id=uuid.uuid4(), role=role, content=content, layout=layout, created_at=NOW)
+def row(role: str, content: str, layout: dict | None = None, suggestion: str | None = None) -> StoredMessage:
+    return StoredMessage(
+        id=uuid.uuid4(), role=role, content=content, layout=layout, suggestion=suggestion, created_at=NOW
+    )
 
 
 class ToHistoryTests(unittest.TestCase):

@@ -140,7 +140,13 @@ class StudioUIGenerator:
             "node ids and content where the request doesn't change them — "
             "using history only for conversational context; otherwise build "
             "fresh. Keep labels concise and explain your interpretation of "
-            "the request in reason."
+            "the request in reason. Separately, if the prompt's request "
+            "implies a layout or UX pattern that is usually suboptimal (e.g. "
+            "stacking a pair of related actions instead of pairing them "
+            "side by side), set suggestion to one short, actionable tip "
+            "about that — talk to the user, not about the JSON you produced. "
+            "Leave suggestion null when the request has no such improvement "
+            "to point out; do not restate reason there."
         )
         average_score = _average_score(feedback)
         if feedback:
@@ -192,6 +198,7 @@ class StudioUIGenerator:
                 return StudioUISpec(
                     generated_by="llm",
                     reason=output.reason,
+                    suggestion=output.suggestion,
                     layout=output.layout,
                 )
             except Exception as exc:  # provider, timeout and schema failures all fall back

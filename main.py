@@ -136,6 +136,7 @@ class StudioGenerateResponse(BaseModel):
     schema_version: str
     generated_by: str
     reason: str
+    suggestion: str | None
     layout: StudioPageNode
 
 
@@ -154,6 +155,7 @@ class StudioProjectMessage(BaseModel):
     role: str
     content: str
     layout: StudioPageNode | None
+    suggestion: str | None
     created_at: datetime
 
 
@@ -395,6 +397,7 @@ async def generate_studio_ui(
         "assistant",
         spec.reason,
         layout=spec.layout if spec.generated_by == "llm" else None,
+        suggestion=spec.suggestion if spec.generated_by == "llm" else None,
     )
     await store.prune(conversation_id)
     await session.commit()
@@ -404,6 +407,7 @@ async def generate_studio_ui(
         schema_version=spec.schema_version,
         generated_by=spec.generated_by,
         reason=spec.reason,
+        suggestion=spec.suggestion,
         layout=spec.layout,
     )
 
@@ -444,6 +448,7 @@ async def get_studio_project(project_id: str, session: AsyncSession = Depends(ge
                 role=message.role,
                 content=message.content,
                 layout=StudioPageNode.model_validate(message.layout) if message.layout is not None else None,
+                suggestion=message.suggestion,
                 created_at=message.created_at,
             )
             for message in messages

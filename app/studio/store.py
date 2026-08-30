@@ -36,6 +36,7 @@ class StoredMessage:
     role: str
     content: str
     layout: dict[str, Any] | None
+    suggestion: str | None
     created_at: datetime
 
 
@@ -128,7 +129,12 @@ class StudioConversationStore:
         )
         return [
             StoredMessage(
-                id=row.id, role=row.role, content=row.content, layout=row.layout, created_at=row.created_at
+                id=row.id,
+                role=row.role,
+                content=row.content,
+                layout=row.layout,
+                suggestion=row.suggestion,
+                created_at=row.created_at,
             )
             for row in result.scalars().all()
         ]
@@ -151,6 +157,7 @@ class StudioConversationStore:
         content: str,
         *,
         layout: StudioPageNode | None = None,
+        suggestion: str | None = None,
     ) -> None:
         self.session.add(
             StudioMessageModel(
@@ -158,6 +165,7 @@ class StudioConversationStore:
                 role=role,
                 content=content,
                 layout=layout.model_dump(mode="json", by_alias=True) if layout is not None else None,
+                suggestion=suggestion,
             )
         )
         result = await self.session.execute(

@@ -68,6 +68,27 @@ class StudioUIGeneratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([child.type for child in section.children], ["button", "button"])
         StudioUISpec.model_validate(spec.model_dump(mode="json"))
 
+    async def test_suggestion_from_the_model_reaches_the_spec(self) -> None:
+        payload = {**VALID_LAYOUT, "suggestion": "Suele leerse mejor si van en horizontal."}
+        generator = StudioUIGenerator(
+            api_key="test-key", enabled=True, request_response=lambda *_args: response(payload)
+        )
+
+        spec = await generator.generate("crea dos botones")
+
+        self.assertEqual(spec.suggestion, "Suele leerse mejor si van en horizontal.")
+
+    async def test_missing_suggestion_from_the_model_is_none(self) -> None:
+        generator = StudioUIGenerator(
+            api_key="test-key",
+            enabled=True,
+            request_response=lambda *_args: response(VALID_LAYOUT),
+        )
+
+        spec = await generator.generate("crea dos botones")
+
+        self.assertIsNone(spec.suggestion)
+
     async def test_disabled_returns_blank_fallback(self) -> None:
         generator = StudioUIGenerator(api_key="")
 

@@ -106,6 +106,7 @@ class StudioLLMOutput(ContractModel):
     """
 
     reason: str = Field(min_length=1, max_length=500)
+    suggestion: str | None = Field(default=None, max_length=300)
     layout: StudioPageNode
 
 
@@ -113,6 +114,7 @@ class StudioUISpec(ContractModel):
     schema_version: Literal["1"] = SCHEMA_VERSION
     generated_by: Literal["llm", "fallback"]
     reason: str = Field(min_length=1, max_length=500)
+    suggestion: str | None = Field(default=None, max_length=300)
     layout: StudioPageNode
 
     @model_validator(mode="after")

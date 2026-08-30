@@ -54,8 +54,11 @@ class StudioMessageModel(Base):
     ``layout`` is only set on assistant turns that actually produced a
     layout (``generatedBy == "llm"``); a blank-fallback turn keeps it null
     so the next request doesn't treat a "not available" screen as the thing
-    to edit. Rows beyond the retention cap are deleted by
-    ``app.studio.store``, not by a database-side policy."""
+    to edit. ``suggestion`` is the model's optional, forward-looking UX tip
+    about the prompt — distinct from ``content`` (the ``reason`` explaining
+    what was actually built) — and is likewise only set on ``llm`` turns.
+    Rows beyond the retention cap are deleted by ``app.studio.store``, not by
+    a database-side policy."""
 
     __tablename__ = "studio_messages"
 
@@ -66,6 +69,7 @@ class StudioMessageModel(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     layout: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    suggestion: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
