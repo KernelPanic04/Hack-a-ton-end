@@ -16,11 +16,14 @@ from app.runtime.pipeline import RuntimePipeline
 from app.schemas.contracts import (
     ActionAcceptedEnvelope,
     ActionSubmittedEnvelope,
+    AssistRequest,
+    AssistResponse,
     RunEvent,
     RunProjection,
     UIUpdatedEnvelope,
 )
 from app.policy import ActionCoordinator
+from app.synthesis import AriAssistant
 from app.ws import RunWebSocketHub
 
 # Importante: cargar los modelos antes de crear tablas.
@@ -253,6 +256,23 @@ async def get_run_projection(
     """Snapshot para reconexión y polling; no depende del WebSocket."""
     try:
         return await RunEngine(session).get_projection(_run_uuid(run_id))
+    except RunEngineError as exc:
+        raise _runtime_error(exc) from exc
+
+
+@app.post("/runs/{run_id}/assist", response_model=AssistResponse, tags=["Assistant"])
+async def assist_run(
+    run_id: str,
+    request: AssistRequest,
+    session: AsyncSession = Depends(get_db),
+) -> AssistResponse:
+    """Return Ari's bounded recommendation; it never executes an action."""
+    try:
+        engine = RunEngine(session)
+        run_uuid = _run_uuid(run_id)
+        projection = await engine.get_projection(run_uuid)
+        events = await engine.get_event_log(run_uuid)
+        return await AriAssistant().respond(projection, events[-20:], request)
     except RunEngineError as exc:
         raise _runtime_error(exc) from exc
 
