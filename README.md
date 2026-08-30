@@ -79,6 +79,11 @@ vuelve a enrutar `/demo`. Nunca commitees `.env`.
 
 ## Arquitectura
 
+![Arquitectura de Kernel Panic: Studio vivo + runtime heredado dormido, en ambos repos](./architecture.svg)
+
+Diagrama completo (ambos repos, qué está vivo vs. dormido, dónde vive cada
+tabla): [`architecture.svg`](./architecture.svg). Versión resumida:
+
 ```mermaid
 flowchart LR
     subgraph Studio["Studio (vivo)"]

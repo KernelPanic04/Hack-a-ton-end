@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1680 1020" width="1680" height="1020" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrowSolid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#171714" />
+    </marker>
+    <marker id="arrowGray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9a9890" />
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1680" height="1020" fill="#fbfaf7" />
+
+  <!-- Title -->
+  <text x="840" y="34" text-anchor="middle" font-size="26" font-weight="800" fill="#171714">Kernel Panic — Arquitectura</text>
+  <text x="840" y="58" text-anchor="middle" font-size="14" fill="#6b6a63">Studio (vivo) + runtime de agente (dormido) · dos repos, un backend, una PostgreSQL</text>
+
+  <!-- Browser -->
+  <rect x="270" y="72" width="300" height="52" rx="10" fill="#171714" />
+  <text x="420" y="104" text-anchor="middle" font-size="16" font-weight="700" fill="#dbff45">Navegador del usuario</text>
+  <line x1="420" y1="124" x2="420" y2="152" stroke="#171714" stroke-width="2.5" marker-end="url(#arrowSolid)" />
+
+  <!-- Frontend panel -->
+  <rect x="40" y="152" width="760" height="470" rx="14" fill="#ffffff" stroke="#171714" stroke-width="1.5" />
+  <text x="70" y="184" font-size="18" font-weight="800" fill="#171714">Hack-a-ton-front (repo)</text>
+  <text x="70" y="204" font-size="13" fill="#6b6a63">React 19 + Vite · el navegador ejecuta el fetch/WS, no un servidor</text>
+
+  <!-- Frontend: LIVE -->
+  <rect x="70" y="220" width="700" height="130" rx="10" fill="#f4f1ff" stroke="#6f59ff" stroke-width="2" />
+  <text x="90" y="244" font-size="14" font-weight="800" fill="#4a3ad1">● VIVO — todo lo que App.tsx monta</text>
+  <text x="90" y="268" font-size="13" fill="#171714">App.tsx → src/pages/Studio.tsx (única página; sin router)</text>
+  <text x="90" y="290" font-size="13" fill="#171714">src/studio/ — api.ts (fetch a /studio/*), StudioRenderer.tsx (render "contract-free")</text>
+  <text x="90" y="312" font-size="13" fill="#171714">src/components/studio/ — canvas, árbol de iteraciones, historial, feedback</text>
+  <text x="90" y="336" font-size="12" fill="#6b6a63">color, filterTarget/filterColumn client-side, mapa (MapLibre), preview con container queries</text>
+
+  <!-- Frontend: DORMANT -->
+  <rect x="70" y="366" width="700" height="150" rx="10" fill="#f3f2ee" stroke="#9a9890" stroke-width="2" stroke-dasharray="7 5" />
+  <text x="90" y="390" font-size="14" font-weight="800" fill="#6b6a63">○ DORMIDO — código completo, ninguna ruta llega aquí</text>
+  <text x="90" y="414" font-size="13" fill="#6b6a63">src/pages/Landing.tsx · src/pages/Demo.tsx · src/editor/</text>
+  <text x="90" y="436" font-size="13" fill="#6b6a63">src/runtime/ (contratos, AJV, reducer, WebSocket)</text>
+  <text x="90" y="458" font-size="13" fill="#6b6a63">src/assistant/ (chat de Ari) · src/inspector/ · src/history/</text>
+  <text x="90" y="484" font-size="12" fill="#8a8880">No hay react-router: cualquier URL sirve el mismo App.tsx → solo Studio.</text>
+  <text x="90" y="502" font-size="12" fill="#8a8880">Compila, tiene tests propios; el backend que lo sirve sigue vivo.</text>
+
+  <!-- Frontend: SHARED -->
+  <rect x="70" y="536" width="700" height="66" rx="10" fill="#eaf6fb" stroke="#1c7fa6" stroke-width="2" />
+  <text x="90" y="560" font-size="14" font-weight="800" fill="#0f5b78">↔ COMPARTIDO</text>
+  <text x="90" y="582" font-size="13" fill="#171714">components/ui-kit/RouteMap.tsx (MapLibre GL, fallback SVG) — nodo `map` de Studio y del runtime heredado</text>
+
+  <!-- Backend panel -->
+  <rect x="880" y="152" width="760" height="470" rx="14" fill="#ffffff" stroke="#171714" stroke-width="1.5" />
+  <text x="910" y="184" font-size="18" font-weight="800" fill="#171714">Hack-a-ton-end (repo)</text>
+  <text x="910" y="204" font-size="13" fill="#6b6a63">FastAPI + PostgreSQL · un solo servicio expone ambos subsistemas</text>
+
+  <!-- Backend: main.py -->
+  <rect x="910" y="220" width="700" height="52" rx="10" fill="#171714" />
+  <text x="1260" y="252" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">main.py — todas las rutas HTTP/WS, CORS, lifespan (Base.metadata.create_all)</text>
+
+  <!-- Backend: LIVE -->
+  <rect x="910" y="288" width="700" height="112" rx="10" fill="#f4f1ff" stroke="#6f59ff" stroke-width="2" />
+  <text x="930" y="312" font-size="14" font-weight="800" fill="#4a3ad1">● VIVO — Studio (app/studio/)</text>
+  <text x="930" y="336" font-size="13" fill="#171714">schema.py — 17 tipos de nodo Pydantic (color, filterTarget, map…)</text>
+  <text x="930" y="358" font-size="13" fill="#171714">llm.py — StudioUIGenerator: prompt → OpenAI (structured output) → valida y reintenta</text>
+  <text x="930" y="380" font-size="13" fill="#171714">store.py — conversaciones / mensajes / feedback</text>
+
+  <!-- Backend: DORMANT -->
+  <rect x="910" y="416" width="700" height="150" rx="10" fill="#f3f2ee" stroke="#9a9890" stroke-width="2" stroke-dasharray="7 5" />
+  <text x="930" y="440" font-size="14" font-weight="800" fill="#6b6a63">○ DORMIDO — runtime de agente (probado, sin ruta desde el frontend)</text>
+  <text x="930" y="464" font-size="13" fill="#6b6a63">app/flow/ · app/runtime/ · app/synthesis/</text>
+  <text x="930" y="486" font-size="13" fill="#6b6a63">app/policy/ · app/ws/ · app/demo/</text>
+  <text x="930" y="508" font-size="13" fill="#6b6a63">app/schemas/contracts.py — contrato v1 congelado (espejo: src/runtime/contracts.ts)</text>
+  <text x="930" y="530" font-size="12" fill="#8a8880">Workflows versionados, event log, decisiones humanas, WebSocket, asistente Ari.</text>
+  <text x="930" y="548" font-size="12" fill="#8a8880">Alcanzable solo por HTTP/WS directo — el frontend actual no lo enruta.</text>
+
+  <!-- Backend: connections to DB / OpenAI (Studio, el subsistema vivo, usa ambas hoy) -->
+  <line x1="1100" y1="622" x2="1100" y2="650" stroke="#171714" stroke-width="2.5" marker-end="url(#arrowSolid)" />
+  <line x1="1470" y1="622" x2="1470" y2="650" stroke="#171714" stroke-width="2.5" marker-end="url(#arrowSolid)" />
+
+  <!-- HTTP boundary between panels (gap is only ~110px wide: keep labels short & centered) -->
+  <line x1="770" y1="270" x2="910" y2="336" stroke="#171714" stroke-width="2.5" marker-end="url(#arrowSolid)" />
+  <text x="840" y="293" text-anchor="middle" font-size="10.5" fill="#171714" font-weight="700">POST /api/studio/*</text>
+  <text x="840" y="306" text-anchor="middle" font-size="10.5" fill="#171714" font-weight="700">(mismo origen)</text>
+
+  <line x1="770" y1="440" x2="910" y2="480" stroke="#9a9890" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowGray)" />
+  <text x="840" y="453" text-anchor="middle" font-size="10.5" fill="#8a8880">(dormido) WS /api/ws/*,</text>
+  <text x="840" y="466" text-anchor="middle" font-size="10.5" fill="#8a8880">/api/runs, /api/demo/*</text>
+
+  <!-- External row -->
+  <rect x="910" y="650" width="380" height="140" rx="10" fill="#eef4fb" stroke="#336791" stroke-width="2" />
+  <text x="1100" y="674" text-anchor="middle" font-size="14" font-weight="800" fill="#1d4a6e">PostgreSQL (una instancia, compartida)</text>
+  <text x="930" y="696" font-size="10.5" fill="#171714">Studio: studio_conversations, studio_messages,</text>
+  <text x="930" y="712" font-size="10.5" fill="#171714">studio_conversation_feedback</text>
+  <text x="930" y="732" font-size="10.5" fill="#171714">Runtime heredado: workflow_definitions, workflow_versions,</text>
+  <text x="930" y="748" font-size="10.5" fill="#171714">runs, run_events, human_decisions</text>
+  <text x="930" y="770" font-size="10.5" fill="#b03a2e" font-weight="700">⚠ sin migraciones: create_all() no altera tablas ya existentes</text>
+
+  <rect x="1310" y="650" width="320" height="140" rx="10" fill="#fff6e8" stroke="#c07a1f" stroke-width="2" />
+  <text x="1470" y="674" text-anchor="middle" font-size="14" font-weight="800" fill="#8a5a12">OpenAI API</text>
+  <text x="1330" y="698" font-size="10.5" fill="#171714">gpt-5.4-mini vía Responses API</text>
+  <text x="1330" y="716" font-size="10.5" fill="#171714">(structured outputs)</text>
+  <text x="1330" y="738" font-size="10.5" fill="#171714">Studio: obligatorio (sin key no genera nada)</text>
+  <text x="1330" y="756" font-size="10.5" fill="#171714">Runtime heredado: upgrade opcional + asistente Ari</text>
+
+  <!-- Legend -->
+  <text x="70" y="822" font-size="13" font-weight="800" fill="#171714">Leyenda</text>
+
+  <rect x="70" y="836" width="26" height="18" rx="4" fill="#f4f1ff" stroke="#6f59ff" stroke-width="2" />
+  <text x="104" y="850" font-size="12.5" fill="#171714">Vivo (Studio) — alcanzable desde la app hoy</text>
+
+  <rect x="70" y="864" width="26" height="18" rx="4" fill="#f3f2ee" stroke="#9a9890" stroke-width="2" stroke-dasharray="5 4" />
+  <text x="104" y="878" font-size="12.5" fill="#171714">Dormido — código presente y probado, sin ruta que lo alcance</text>
+
+  <line x1="70" y1="900" x2="96" y2="900" stroke="#171714" stroke-width="2.5" marker-end="url(#arrowSolid)" />
+  <text x="104" y="904" font-size="12.5" fill="#171714">Llamada de red usada por la app hoy</text>
+
+  <line x1="70" y1="924" x2="96" y2="924" stroke="#9a9890" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrowGray)" />
+  <text x="104" y="928" font-size="12.5" fill="#171714">Llamada de red implementada pero sin ruta que la dispare hoy</text>
+
+  <text x="840" y="1000" text-anchor="middle" font-size="11.5" fill="#9a9890">Generado a partir de Hack-a-ton-front/README.md y Hack-a-ton-end/README.md — actualízalo junto con ellos si la arquitectura cambia.</text>
+</svg>
