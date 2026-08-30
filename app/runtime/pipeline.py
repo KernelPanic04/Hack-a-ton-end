@@ -12,6 +12,7 @@ from app.core.database import AsyncSessionLocal
 from app.runtime.run import RunEngine, RunEngineError
 from app.schemas.contracts import RunProjection, UISpec, UIUpdatedEnvelope, UIUpdatedPayload
 from app.synthesis import DeterministicComposer, LLMComposer
+from app.synthesis.llm_upgrade import blank_ui_spec
 from app.ws import RunWebSocketHub
 
 
@@ -29,8 +30,26 @@ class RuntimePipeline:
         self.llm_composer = llm_composer or LLMComposer()
 
     async def publish_current(self, run_id: uuid.UUID) -> UIUpdatedEnvelope:
+        """Publish the UI for the current transition.
+
+        With the LLM composer disabled (deterministic-only mode, see
+        ``LLM_UPGRADE_ENABLED``/``OPENAI_API_KEY``), this publishes the
+        deterministic ``UISpec`` immediately, as before.
+
+        With it enabled, the deterministic layout is only computed internally
+        as the LLM's working reference (prompt content and trusted-map
+        protection) and is never shown to the user. Instead this publishes a
+        blank placeholder immediately and kicks off the LLM build in the
+        background; a guessed deterministic layout unrelated to what was
+        actually requested is worse than an explicit "generating" state.
+        """
         projection = await self.engine.get_projection(run_id)
-        ui_spec = self.composer.compose(projection)
+        if self.llm_composer.enabled:
+            deterministic_reference = self.composer.compose(projection)
+            ui_spec = blank_ui_spec(projection, reason="Generando la interfaz solicitada…")
+        else:
+            deterministic_reference = None
+            ui_spec = self.composer.compose(projection)
         event = await self.engine.save_ui_spec(run_id, ui_spec)
         projection = await self.engine.get_projection(run_id)
         envelope = UIUpdatedEnvelope(
@@ -41,9 +60,9 @@ class RuntimePipeline:
             payload=UIUpdatedPayload(event=event, projection=projection, ui_spec=ui_spec),
         )
         await self.hub.publish(envelope)
-        if self.llm_composer.enabled:
+        if deterministic_reference is not None:
             asyncio.create_task(
-                self._publish_llm_upgrade(run_id, projection, ui_spec),
+                self._publish_llm_upgrade(run_id, projection, deterministic_reference),
                 name=f"llm-ui-upgrade:{projection.run_id}:{projection.state_version}",
             )
         return envelope

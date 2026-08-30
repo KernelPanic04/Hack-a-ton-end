@@ -20,6 +20,7 @@ from app.schemas.contracts import (
     StepProps,
 )
 from app.synthesis.llm import DEFAULT_MODEL, ResponseRequest, _output_text, _request_response
+from app.synthesis.llm_upgrade import describe_failure
 
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,19 @@ def generic_step_output_format() -> dict[str, Any]:
     }
 
 
+def _blank_result(attempts: int, error: Exception | None) -> GenericStepLLMResult:
+    reason = (
+        f"No se pudo generar el análisis solicitado tras {attempts} intentos "
+        f"({describe_failure(error)})."
+    )
+    return GenericStepLLMResult(
+        findings=[reason],
+        comparison=None,
+        verdict="unknown",
+        summary=reason,
+    )
+
+
 class GenericStepLLMExecutor:
     """Analyze resolved inputs while keeping the deterministic executor authoritative.
 
@@ -78,7 +92,7 @@ class GenericStepLLMExecutor:
         api_key: str | None = None,
         model: str | None = None,
         timeout_seconds: float = 5.0,
-        retries: int = 1,
+        retries: int = 5,
         enabled: bool | None = None,
         request_response: ResponseRequest = _request_response,
     ) -> None:
@@ -131,6 +145,14 @@ class GenericStepLLMExecutor:
         resolved_inputs: Mapping[str, Any],
         missing_inputs: list[str],
     ) -> GenericStepLLMResult | None:
+        """Return a validated LLM analysis.
+
+        ``None`` means the executor is disabled (deterministic-only mode) and
+        the caller should proceed with resolved-input data alone. When it is
+        enabled but every retry fails, this returns a blank fallback result
+        instead of ``None``: the caller would otherwise merge in nothing and
+        silently look identical to a deterministic-only run.
+        """
         if not self.enabled:
             return None
 
@@ -139,6 +161,7 @@ class GenericStepLLMExecutor:
             resolved_inputs=resolved_inputs,
             missing_inputs=missing_inputs,
         )
+        last_error: Exception | None = None
         for attempt in range(self.retries + 1):
             try:
                 response = await asyncio.wait_for(
@@ -152,13 +175,15 @@ class GenericStepLLMExecutor:
                 )
                 return GenericStepLLMResult.model_validate_json(_output_text(response))
             except Exception as exc:  # provider, timeout and schema failures fall back
+                last_error = exc
                 if attempt >= self.retries:
                     logger.warning(
-                        "Generic-step LLM analysis failed; deterministic result remains active: %s",
+                        "Generic-step LLM analysis failed after %s attempts; returning blank result: %s",
+                        self.retries + 1,
                         type(exc).__name__,
                     )
-                    return None
-        return None
+                    return _blank_result(self.retries + 1, last_error)
+        return _blank_result(self.retries + 1, last_error)
 
 
 def result_nodes(

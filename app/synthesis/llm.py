@@ -12,6 +12,8 @@ from urllib.request import Request, urlopen
 
 from app.schemas.contracts import RunProjection, UISpec
 from app.synthesis.llm_upgrade import (
+    blank_ui_spec,
+    describe_failure,
     merge_llm_upgrade,
     structured_output_format,
     validate_llm_upgrade,
@@ -82,7 +84,7 @@ class LLMComposer:
         api_key: str | None = None,
         model: str | None = None,
         timeout_seconds: float | None = None,
-        retries: int = 1,
+        retries: int = 5,
         enabled: bool | None = None,
         request_response: ResponseRequest = _request_response,
     ) -> None:
@@ -135,12 +137,21 @@ class LLMComposer:
     async def compose_upgrade(
         self, projection: RunProjection, baseline: UISpec
     ) -> UISpec | None:
-        """Return a validated LLM upgrade, or ``None`` to keep the baseline."""
+        """Return a validated LLM upgrade.
+
+        ``None`` means the composer is disabled (deterministic-only mode, see
+        ``LLM_UPGRADE_ENABLED``/``OPENAI_API_KEY``) and the caller should keep
+        showing the deterministic baseline. When the composer is enabled but
+        every retry fails, this returns a blank fallback ``UISpec`` instead of
+        the deterministic baseline: a guessed layout unrelated to what the LLM
+        was asked to build is worse than an explicit "not available" screen.
+        """
 
         if not self.enabled:
             return None
 
         payload = self._payload(projection, baseline)
+        last_error: Exception | None = None
         for attempt in range(self.retries + 1):
             try:
                 response = await asyncio.wait_for(
@@ -157,10 +168,24 @@ class LLMComposer:
                     raise ValueError("LLM upgrade changed or removed a trusted map node")
                 return merge_llm_upgrade(baseline, upgrade)
             except Exception as exc:  # provider, timeout and schema failures all fall back
+                last_error = exc
                 if attempt >= self.retries:
                     logger.warning(
-                        "LLM UISpec upgrade failed; deterministic UI remains active: %s",
+                        "LLM UISpec upgrade failed after %s attempts; showing blank fallback: %s",
+                        self.retries + 1,
                         type(exc).__name__,
                     )
-                    return None
-        return None
+                    return blank_ui_spec(
+                        projection,
+                        reason=(
+                            f"No se pudo generar la interfaz solicitada tras {self.retries + 1} "
+                            f"intentos ({describe_failure(last_error)})."
+                        ),
+                    )
+        return blank_ui_spec(
+            projection,
+            reason=(
+                f"No se pudo generar la interfaz solicitada tras {self.retries + 1} "
+                f"intentos ({describe_failure(last_error)})."
+            ),
+        )

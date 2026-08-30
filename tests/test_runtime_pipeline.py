@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -6,6 +7,7 @@ from uuid import UUID
 
 from app.runtime.pipeline import RuntimePipeline
 from app.schemas.contracts import RunEvent, RunProjection, UISpec
+from app.synthesis import LLMComposer
 
 
 RUN_UUID = UUID("550e8400-e29b-41d4-a716-446655440000")
@@ -56,6 +58,41 @@ class RuntimePipelineTests(unittest.IsolatedAsyncioTestCase):
             RUN_UUID, envelope.payload.ui_spec
         )
         hub.publish.assert_awaited_once_with(envelope)
+
+    async def test_llm_enabled_publishes_blank_placeholder_not_a_deterministic_guess(
+        self,
+    ) -> None:
+        before_transition = fixture_projection()
+        after_transition = before_transition.model_copy(update={"last_sequence": 3})
+        ui_event = RunEvent(
+            event_id="evt_ui_updated",
+            run_id=before_transition.run_id,
+            workflow_id=before_transition.workflow_id,
+            workflow_version=before_transition.workflow_version,
+            sequence=3,
+            state_version=before_transition.state_version,
+            type="UI_UPDATED",
+            timestamp=datetime(2026, 8, 29, 12, 2, tzinfo=timezone.utc),
+        )
+        hub = type("Hub", (), {"publish": AsyncMock()})()
+        llm_composer = LLMComposer(api_key="test-key", enabled=True)
+        llm_composer.compose_upgrade = AsyncMock(return_value=None)
+        pipeline = RuntimePipeline(session=None, hub=hub, llm_composer=llm_composer)  # type: ignore[arg-type]
+        pipeline.engine.get_projection = AsyncMock(
+            side_effect=[before_transition, after_transition]
+        )
+        pipeline.engine.save_ui_spec = AsyncMock(return_value=ui_event)
+
+        envelope = await pipeline.publish_current(RUN_UUID)
+        pending = [
+            task
+            for task in asyncio.all_tasks()
+            if task is not asyncio.current_task() and not task.done()
+        ]
+        await asyncio.gather(*pending)
+
+        self.assertEqual(envelope.payload.ui_spec.generated_by, "fallback")
+        llm_composer.compose_upgrade.assert_awaited_once()
 
 
 if __name__ == "__main__":

@@ -2,7 +2,15 @@
 
 from typing import Any
 
-from app.schemas.contracts import ContractModel, PageNode, UISpec
+from app.schemas.contracts import (
+    AlertNode,
+    AlertProps,
+    ContractModel,
+    PageNode,
+    PageProps,
+    RunProjection,
+    UISpec,
+)
 
 
 class LLMUISpecUpgrade(ContractModel):
@@ -71,4 +79,62 @@ def merge_llm_upgrade(baseline: UISpec, upgrade: LLMUISpecUpgrade) -> UISpec:
         reason=upgrade.reason,
         layout=upgrade.layout,
         allowed_actions=baseline.allowed_actions,
+    )
+
+
+MAX_FAILURE_DETAIL_LENGTH = 160
+
+
+def describe_failure(error: Exception | None) -> str:
+    """A short, provider-safe description of the exception behind a fallback.
+
+    Only the exception type and its own message are used — never the request
+    payload or the API key — and the detail is truncated so it always fits
+    inside the ``reason``/``message`` length limits.
+    """
+
+    if error is None:
+        return "motivo desconocido"
+    label = type(error).__name__
+    detail = str(error).strip()
+    if not detail:
+        return label
+    if len(detail) > MAX_FAILURE_DETAIL_LENGTH:
+        detail = detail[:MAX_FAILURE_DETAIL_LENGTH].rstrip() + "…"
+    return f"{label}: {detail}"
+
+
+def blank_ui_spec(projection: RunProjection, reason: str) -> UISpec:
+    """A minimal, contract-valid placeholder shown when no LLM-built layout exists.
+
+    Used while the LLM composer is generating the requested layout and after it
+    exhausts its retries; never a guessed deterministic layout unrelated to the
+    request. ``allowed_actions`` still comes from the trusted projection so
+    pending decisions remain actionable even in this state.
+    """
+
+    return UISpec(
+        run_id=projection.run_id,
+        workflow_id=projection.workflow_id,
+        workflow_version=projection.workflow_version,
+        state_version=projection.state_version,
+        generated_by="fallback",
+        reason=reason,
+        layout=PageNode(
+            id="ui_page",
+            type="page",
+            props=PageProps(title="Run overview"),
+            children=[
+                AlertNode(
+                    id="ui_blank_fallback",
+                    type="alert",
+                    props=AlertProps(
+                        title="Interfaz no disponible",
+                        message=reason,
+                        emphasis="warning",
+                    ),
+                )
+            ],
+        ),
+        allowed_actions=projection.available_actions,
     )
